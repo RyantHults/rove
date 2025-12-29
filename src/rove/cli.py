@@ -397,6 +397,9 @@ async def cmd_build_context(
     from .context_builder import ContextBuilder
     from .search_agent import SearchAgent
 
+    # Normalize ticket ID to uppercase for consistency
+    ticket_id = ticket_id.upper()
+
     config = load_config()
     source = source_override or config.sources.default_ticket_source
 

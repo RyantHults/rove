@@ -28,6 +28,8 @@ class SourceConfig:
     page_size: int = 50  # items per API call
     client_id: str = ""  # OAuth client ID (required for OAuth sources)
     client_secret: str = ""  # OAuth client secret (required for OAuth sources)
+    default_owner: str = ""  # GitHub: default org/owner for PR/issue lookups
+    default_repo: str = ""  # GitHub: default repo for PR/issue lookups
 
 
 @dataclass
@@ -114,6 +116,10 @@ def load_config() -> RoveConfig:
                     source_config.client_id = source_data["client_id"]
                 if "client_secret" in source_data:
                     source_config.client_secret = source_data["client_secret"]
+                if "default_owner" in source_data:
+                    source_config.default_owner = source_data["default_owner"]
+                if "default_repo" in source_data:
+                    source_config.default_repo = source_data["default_repo"]
 
     # Merge scheduler section
     if "scheduler" in data:
@@ -161,6 +167,8 @@ def save_config(config: RoveConfig) -> None:
                 "page_size": config.sources.github.page_size,
                 "client_id": config.sources.github.client_id,
                 "client_secret": config.sources.github.client_secret,
+                "default_owner": config.sources.github.default_owner,
+                "default_repo": config.sources.github.default_repo,
             },
         },
         "scheduler": {

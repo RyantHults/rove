@@ -169,6 +169,9 @@ Return ONLY comma-separated indices of items to keep (e.g., "0, 2, 5"):"""
         if not items:
             raise ValueError("No items to build context from")
 
+        # Normalize ticket ID to uppercase for consistency
+        ticket_id = ticket_id.upper()
+
         logger.info(f"Building context for {ticket_id} from {len(items)} items")
 
         with PerformanceTimer(
@@ -186,24 +189,28 @@ Return ONLY comma-separated indices of items to keep (e.g., "0, 2, 5"):"""
             # Check for existing content for deduplication
             existing_content: str | None = None
             existing_record = await self.db.get_context_file(ticket_id)
+            
+            # Reuse existing filename if it exists, otherwise generate new one
             if existing_record:
-                existing_path = output_dir / existing_record.filename
+                filename = existing_record.filename
+                existing_path = output_dir / filename
                 if existing_path.exists():
                     existing_content = existing_path.read_text()
+                # Use existing keywords for database update
+                keywords = existing_record.keywords
+            else:
+                # Extract keywords for filename only if no existing file
+                logger.debug("Extracting keywords for filename")
+                keywords = await self._extract_keywords(items)
+                keywords_slug = "_".join(keywords[:4])
+                filename = f"{ticket_id}_{keywords_slug}.md"
+            
+            output_path = output_dir / filename
 
             # Deduplicate items (AI semantic + URL-based)
             logger.debug("Deduplicating items")
             items = await self.deduplicate_items(items, existing_content)
             timer.add_metric("items_after_dedup", len(items))
-
-            # Extract keywords for filename
-            logger.debug("Extracting keywords for filename")
-            keywords = await self._extract_keywords(items)
-
-            # Generate filename
-            keywords_slug = "_".join(keywords[:4])
-            filename = f"{ticket_id}_{keywords_slug}.md"
-            output_path = output_dir / filename
 
             # Group items by topic
             logger.debug("Grouping items by topic via AI")

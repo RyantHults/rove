@@ -65,6 +65,11 @@ class SearchAgent:
                         source_config["client_id"] = src_cfg.client_id
                     if src_cfg.client_secret:
                         source_config["client_secret"] = src_cfg.client_secret
+                    # Include GitHub-specific config
+                    if hasattr(src_cfg, "default_owner") and src_cfg.default_owner:
+                        source_config["default_owner"] = src_cfg.default_owner
+                    if hasattr(src_cfg, "default_repo") and src_cfg.default_repo:
+                        source_config["default_repo"] = src_cfg.default_repo
                 self._clients[source] = factory(source_config)
         return self._clients.get(source)
 
@@ -89,6 +94,9 @@ class SearchAgent:
         primary_source = source_override or self.config.sources.default_ticket_source
         all_items: list[ContextItem] = []
         seen_urls: set[str] = set()
+
+        # Normalize ticket ID to uppercase for consistency
+        ticket_id = ticket_id.upper()
 
         logger.info(f"Starting search for {ticket_id} from {primary_source}")
 
@@ -295,14 +303,43 @@ Example: authentication, OAuth2, API keys, enterprise SSO"""
         Returns:
             Filtered list of relevant items.
         """
-        if len(items) <= 5:
+        if len(items) <= 10:
             return items  # Don't filter small sets
+
+        # Pre-filter: prioritize items that mention the ticket ID in title
+        ticket_id = primary.title.split(":")[0].strip() if ":" in primary.title else ""
+        
+        # Separate items into tiers
+        tier1_items = []  # Explicitly mention ticket ID
+        tier2_items = []  # From same sources as primary, or PRs/issues
+        tier3_items = []  # Everything else
+        
+        for item in items:
+            if ticket_id and ticket_id.upper() in item.title.upper():
+                tier1_items.append(item)
+            elif item.item_type in ("pr", "issue", "ticket"):
+                tier2_items.append(item)
+            else:
+                tier3_items.append(item)
+        
+        # Limit items to send to AI (prioritize tier1 and tier2)
+        max_items_for_ai = 50
+        items_for_ai = tier1_items + tier2_items
+        if len(items_for_ai) < max_items_for_ai:
+            items_for_ai.extend(tier3_items[:max_items_for_ai - len(items_for_ai)])
+        else:
+            items_for_ai = items_for_ai[:max_items_for_ai]
+        
+        logger.debug(
+            f"Pre-filtered to {len(items_for_ai)} items for AI "
+            f"(tier1={len(tier1_items)}, tier2={len(tier2_items)}, tier3={len(tier3_items)})"
+        )
 
         # Build item summaries for AI
         summaries = []
-        for i, item in enumerate(items):
+        for i, item in enumerate(items_for_ai):
             summaries.append(
-                f"{i}. [{item.source}] {item.title}: {item.content[:200]}..."
+                f"{i}. [{item.source}] {item.title}: {item.content[:150]}..."
             )
 
         prompt = f"""Given this primary ticket:
@@ -310,6 +347,7 @@ Title: {primary.title}
 Description: {primary.content[:500]}
 
 Which of these items are relevant to understanding or implementing this ticket?
+Be inclusive - include items that discuss the same feature, related PRs, design discussions, etc.
 Return ONLY the numbers of relevant items, comma-separated.
 
 Items:
@@ -322,25 +360,38 @@ Relevant item numbers:"""
             response = await client.chat.completions.create(
                 model=self.config.ai.model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=100,
+                max_tokens=500,  # Enough room for many item numbers
                 temperature=0.3,
             )
             response_text = response.choices[0].message.content or ""
+            logger.debug(f"AI relevance filter response: {response_text[:200]}")
 
             # Parse numbers from response
             relevant_indices: set[int] = set()
             for part in response_text.replace(",", " ").split():
                 try:
                     idx = int(part.strip().rstrip("."))
-                    if 0 <= idx < len(items):
+                    if 0 <= idx < len(items_for_ai):
                         relevant_indices.add(idx)
                 except ValueError:
                     continue
 
-            # Always include primary (index 0)
+            # Always include primary (index 0 if it's there)
             relevant_indices.add(0)
 
-            return [items[i] for i in sorted(relevant_indices)]
-        except Exception:
-            return items  # Return all on failure
+            filtered = [items_for_ai[i] for i in sorted(relevant_indices)]
+            logger.debug(f"AI selected {len(filtered)} relevant items")
+            
+            # If AI returned very few items, include tier1 items anyway
+            if len(filtered) < 5 and tier1_items:
+                for item in tier1_items:
+                    if item not in filtered:
+                        filtered.append(item)
+                logger.debug(f"Added tier1 items, now have {len(filtered)} items")
+            
+            return filtered
+        except Exception as e:
+            logger.warning(f"AI relevance filter failed: {e}, returning pre-filtered items")
+            # Return tier1 + tier2 items as fallback
+            return (tier1_items + tier2_items)[:50] or items[:20]
 

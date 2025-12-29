@@ -4,12 +4,14 @@ Provides access to GitHub PRs, issues, commits, and discussions.
 """
 
 import asyncio
+import re
 import secrets
 import webbrowser
 from datetime import datetime
 
 import httpx
 
+from ...logging import get_logger
 from ..base import (
     ContextClient,
     ContextItem,
@@ -18,6 +20,8 @@ from ..base import (
     get_credentials,
     store_credentials,
 )
+
+logger = get_logger("github")
 
 # GitHub OAuth endpoints
 GITHUB_AUTH_URL = "https://github.com/login/oauth/authorize"
@@ -332,16 +336,32 @@ class GitHubContextClient(ContextClient):
     ) -> list[ContextItem]:
         """Search for GitHub issues and PRs matching the query."""
         if not self._access_token:
+            logger.debug("No access token available for GitHub search")
             return []
 
         items: list[ContextItem] = []
 
-        # Build search query
-        search_query = query
+        # Build search query with proper GitHub search syntax
+        # If it looks like a ticket ID, search in title and body explicitly
+        if self._looks_like_ticket_id(query):
+            # For ticket IDs, search in title and body
+            # Quote the ticket ID to handle special characters
+            search_query = f'"{query}" in:title,body'
+        else:
+            # For regular text queries, search in title and body
+            search_query = f"{query} in:title,body"
+
+        # Add time filters
         if since:
             search_query += f" updated:>={since.strftime('%Y-%m-%d')}"
         if until:
             search_query += f" updated:<={until.strftime('%Y-%m-%d')}"
+
+        # If we have a default repo, scope the search to that repo
+        if self._default_owner and self._default_repo:
+            search_query += f" repo:{self._default_owner}/{self._default_repo}"
+
+        logger.debug(f"GitHub search query: {search_query}")
 
         try:
             async with httpx.AsyncClient() as client:
@@ -361,6 +381,9 @@ class GitHubContextClient(ContextClient):
 
                 if response.status_code == 200:
                     data = response.json()
+                    total_count = data.get("total_count", 0)
+                    logger.debug(f"GitHub search returned {total_count} items")
+                    
                     for item in data.get("items", []):
                         item_type = "pr" if "pull_request" in item else "issue"
                         items.append(
@@ -384,9 +407,21 @@ class GitHubContextClient(ContextClient):
                                 },
                             )
                         )
+                elif response.status_code == 422:
+                    # GitHub API validation error - might be invalid query syntax
+                    error_data = response.json()
+                    logger.warning(f"GitHub search API validation error: {error_data}")
+                elif response.status_code == 403:
+                    # Rate limit or permission issue
+                    logger.warning("GitHub API rate limit or permission denied")
+                else:
+                    logger.warning(f"GitHub search failed with status {response.status_code}: {response.text}")
 
                 # Also search commits if query looks like a ticket ID
                 if self._looks_like_ticket_id(query) and self._default_owner and self._default_repo:
+                    commits_query = f'"{query}" repo:{self._default_owner}/{self._default_repo}'
+                    logger.debug(f"GitHub commit search query: {commits_query}")
+                    
                     commits_response = await client.get(
                         f"{GITHUB_API_BASE}/search/commits",
                         headers={
@@ -394,13 +429,16 @@ class GitHubContextClient(ContextClient):
                             "Accept": "application/vnd.github+json",
                         },
                         params={
-                            "q": f"{query} repo:{self._default_owner}/{self._default_repo}",
+                            "q": commits_query,
                             "per_page": 20,
                         },
                     )
 
                     if commits_response.status_code == 200:
                         commits_data = commits_response.json()
+                        commit_count = commits_data.get("total_count", 0)
+                        logger.debug(f"GitHub commit search returned {commit_count} items")
+                        
                         for commit in commits_data.get("items", []):
                             commit_info = commit.get("commit", {})
                             items.append(
@@ -422,9 +460,12 @@ class GitHubContextClient(ContextClient):
                                 )
                             )
 
-        except Exception:
-            pass
+        except httpx.HTTPError as e:
+            logger.error(f"GitHub search HTTP error: {e}")
+        except Exception as e:
+            logger.error(f"GitHub search error: {e}", exc_info=True)
 
+        logger.debug(f"GitHub search returning {len(items)} items")
         return items
 
     async def get_item_details(self, item_id: str) -> ContextItem | None:
@@ -528,8 +569,6 @@ class GitHubContextClient(ContextClient):
         return ["pr", "issue", "commit"]
 
     def _looks_like_ticket_id(self, query: str) -> bool:
-        """Check if query looks like a ticket ID."""
-        import re
-
+        """Check if query looks like a ticket ID (e.g., TB-214, ABC-123)."""
         return bool(re.match(r"^[A-Z]{2,10}-\d+$", query.upper()))
 

@@ -162,6 +162,9 @@ class RoveScheduler:
         if not self._db:
             return
 
+        # Normalize ticket ID to uppercase for consistency
+        ticket_id = ticket_id.upper()
+
         search_agent = SearchAgent(self.config)
         context_builder = ContextBuilder(self._db, self.config)
 
@@ -180,6 +183,9 @@ class RoveScheduler:
         """
         if not self._db:
             return
+
+        # Normalize ticket ID to uppercase for consistency
+        ticket_id = ticket_id.upper()
 
         # Get existing record
         record = await self._db.get_context_file(ticket_id)
