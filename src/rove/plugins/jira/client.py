@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
+from ...logging import get_logger
 from ..base import (
     ContextClient,
     ContextItem,
@@ -23,6 +24,8 @@ from .auth import (
     perform_oauth_flow,
     refresh_access_token,
 )
+
+logger = get_logger("jira")
 
 
 class JiraContextClient(ContextClient):
@@ -363,15 +366,30 @@ class JiraContextClient(ContextClient):
 
         jql = " AND ".join(jql_parts)
 
+        logger.debug(f"JIRA search query: {jql}")
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self._get_api_base()}/search",
-                    headers=self._get_auth_header(),
-                    params={
+                # Use new /search/jql endpoint (Atlassian deprecated /search)
+                headers = {
+                    **self._get_auth_header(),
+                    "Content-Type": "application/json",
+                }
+                response = await client.post(
+                    f"{self._get_api_base()}/search/jql",
+                    headers=headers,
+                    json={
                         "jql": jql,
                         "maxResults": self.config["page_size"],
-                        "fields": "summary,description,comment,labels,issuelinks,created,updated,creator",
+                        "fields": [
+                            "summary",
+                            "description",
+                            "comment",
+                            "labels",
+                            "issuelinks",
+                            "created",
+                            "updated",
+                            "creator",
+                        ],
                     },
                 )
                 response.raise_for_status()
@@ -379,13 +397,20 @@ class JiraContextClient(ContextClient):
 
                 items = []
                 for issue in data.get("issues", []):
-                    items.extend(self._parse_issue(issue))
+                    parsed = self._parse_issue(issue)
+                    logger.debug(
+                        f"JIRA parsed {issue.get('key')}: "
+                        f"{len(parsed)} items (1 ticket + {len(parsed)-1} comments)"
+                    )
+                    items.extend(parsed)
+                logger.debug(f"JIRA search returned {len(items)} total items")
                 return items
-        except httpx.HTTPError:
+        except httpx.HTTPError as e:
+            logger.error(f"JIRA search failed: {e}")
             return []
 
     async def get_item_details(self, item_id: str) -> ContextItem | None:
-        """Fetch full details of a specific ticket.
+        """Fetch full details of a specific ticket including comments.
 
         Args:
             item_id: The ticket key (e.g., TB-123).
@@ -408,10 +433,29 @@ class JiraContextClient(ContextClient):
                 )
                 response.raise_for_status()
                 issue = response.json()
+                
+                # Debug: log what comments JIRA returned
+                fields = issue.get("fields", {})
+                comment_data = fields.get("comment", {})
+                raw_comments = comment_data.get("comments", [])
+                logger.debug(
+                    f"JIRA API returned {len(raw_comments)} comments for {item_id} "
+                    f"(total: {comment_data.get('total', 0)}, maxResults: {comment_data.get('maxResults', 0)})"
+                )
 
                 items = self._parse_issue(issue)
-                return items[0] if items else None
-        except httpx.HTTPError:
+                if not items:
+                    return None
+                
+                # Store comments in metadata so they can be extracted by caller
+                ticket = items[0]
+                if len(items) > 1:
+                    ticket.metadata["_comments"] = items[1:]
+                    logger.debug(f"Fetched ticket {item_id} with {len(items)-1} comments")
+                
+                return ticket
+        except httpx.HTTPError as e:
+            logger.error(f"Failed to fetch ticket {item_id}: {e}")
             return None
 
     async def disconnect(self) -> None:
@@ -500,13 +544,13 @@ class JiraContextClient(ContextClient):
         return items
 
     def _extract_text(self, adf_content: dict | str | None) -> str:
-        """Extract plain text from Atlassian Document Format.
+        """Extract markdown-formatted text from Atlassian Document Format.
 
         Args:
             adf_content: The content, which may be ADF (dict) or plain text.
 
         Returns:
-            Plain text content.
+            Markdown-formatted text content.
         """
         if not adf_content:
             return ""
@@ -514,15 +558,98 @@ class JiraContextClient(ContextClient):
             return adf_content
 
         # Handle Atlassian Document Format
-        def extract_from_node(node: dict) -> str:
-            text_parts = []
-            if node.get("type") == "text":
-                text_parts.append(node.get("text", ""))
-            for child in node.get("content", []):
-                text_parts.append(extract_from_node(child))
-            return " ".join(text_parts)
+        def extract_from_node(node: dict, list_level: int = 0) -> str:
+            node_type = node.get("type", "")
+            content = node.get("content", [])
 
-        return extract_from_node(adf_content).strip()
+            # Text node - handle marks (bold, italic, etc.)
+            if node_type == "text":
+                text = node.get("text", "")
+                marks = node.get("marks", [])
+                for mark in marks:
+                    mark_type = mark.get("type", "")
+                    if mark_type == "strong":
+                        text = f"**{text}**"
+                    elif mark_type == "em":
+                        text = f"*{text}*"
+                    elif mark_type == "code":
+                        text = f"`{text}`"
+                    elif mark_type == "link":
+                        href = mark.get("attrs", {}).get("href", "")
+                        text = f"[{text}]({href})"
+                return text
+
+            # Block-level nodes
+            if node_type == "paragraph":
+                inner = "".join(extract_from_node(c, list_level) for c in content)
+                return f"{inner}\n\n"
+
+            if node_type == "heading":
+                level = node.get("attrs", {}).get("level", 1)
+                inner = "".join(extract_from_node(c, list_level) for c in content)
+                return f"{'#' * level} {inner}\n\n"
+
+            if node_type == "bulletList":
+                items = [extract_from_node(c, list_level + 1) for c in content]
+                return "".join(items)
+
+            if node_type == "orderedList":
+                result = []
+                for i, c in enumerate(content, 1):
+                    item_text = extract_from_node(c, list_level + 1)
+                    # Replace leading bullet with number
+                    if item_text.startswith("  " * list_level + "- "):
+                        item_text = item_text.replace(
+                            "  " * list_level + "- ",
+                            "  " * list_level + f"{i}. ",
+                            1,
+                        )
+                    result.append(item_text)
+                return "".join(result)
+
+            if node_type == "listItem":
+                indent = "  " * (list_level - 1)
+                inner = "".join(extract_from_node(c, list_level) for c in content)
+                # Remove trailing newlines from inner content for cleaner list formatting
+                inner = inner.rstrip()
+                return f"{indent}- {inner}\n"
+
+            if node_type == "codeBlock":
+                lang = node.get("attrs", {}).get("language", "")
+                inner = "".join(extract_from_node(c, list_level) for c in content)
+                return f"```{lang}\n{inner.strip()}\n```\n\n"
+
+            if node_type == "blockquote":
+                inner = "".join(extract_from_node(c, list_level) for c in content)
+                # Prefix each line with >
+                lines = inner.strip().split("\n")
+                quoted = "\n".join(f"> {line}" for line in lines)
+                return f"{quoted}\n\n"
+
+            if node_type == "rule":
+                return "---\n\n"
+
+            if node_type == "hardBreak":
+                return "\n"
+
+            if node_type == "mention":
+                return f"@{node.get('attrs', {}).get('text', 'user')}"
+
+            if node_type == "emoji":
+                return node.get("attrs", {}).get("shortName", "")
+
+            # Container nodes (doc, etc.) - just process children
+            if content:
+                return "".join(extract_from_node(c, list_level) for c in content)
+
+            return ""
+
+        result = extract_from_node(adf_content).strip()
+        # Clean up excessive newlines
+        import re
+
+        result = re.sub(r"\n{3,}", "\n\n", result)
+        return result
 
     def _get_author_name(self, author: dict | None) -> str:
         """Extract author display name from author dict."""

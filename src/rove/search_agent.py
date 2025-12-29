@@ -44,6 +44,7 @@ class SearchAgent:
             self._ai_client = AsyncOpenAI(
                 base_url=self.config.ai.api_base,
                 api_key=self.config.ai.api_key or "dummy",  # Some providers don't need keys
+                timeout=30.0,  # 30 second timeout for slow providers
             )
         return self._ai_client
 
@@ -100,7 +101,7 @@ class SearchAgent:
 
         logger.info(f"Starting search for {ticket_id} from {primary_source}")
 
-        # Phase 1: Fetch primary ticket
+        # Phase 1: Fetch primary ticket (and comments)
         logger.debug(f"Phase 1: Fetching primary ticket from {primary_source}")
         primary_client = self._get_source_client(primary_source)
         if not primary_client:
@@ -124,17 +125,57 @@ class SearchAgent:
 
         all_items.append(primary_item)
         seen_urls.add(primary_item.url)
+        
+        # Extract comments from metadata (JIRA stores them there)
+        comments = primary_item.metadata.pop("_comments", [])
+        for comment in comments:
+            all_items.append(comment)
+            seen_urls.add(comment.url)
+        
+        # Tier 1 = primary ticket + its comments
+        tier1_items = list(all_items)
+        logger.debug(f"Phase 1: Found ticket + {len(comments)} comments (tier 1)")
 
-        # Phase 2: Extract keywords from primary ticket
-        logger.debug("Phase 2: Extracting keywords via AI")
+        # Phase 2: Expand references from tier 1 ONLY
+        # Look for ticket IDs and PR numbers mentioned in the primary ticket/comments
+        logger.debug("Phase 2: Expanding references from tier 1")
+        tier1_references = self._extract_references(tier1_items)
+        # Filter out self-reference
+        tier1_references = [
+            (ref_type, ref_id) for ref_type, ref_id in tier1_references
+            if ref_id.upper() != ticket_id
+        ]
+        logger.debug(f"Found {len(tier1_references)} references in tier 1")
+
+        for ref_type, ref_id in tier1_references:
+            item = await self._expand_reference(ref_type, ref_id)
+            if item and item.url not in seen_urls:
+                all_items.append(item)
+                seen_urls.add(item.url)
+                # Also get comments if it's a ticket
+                ref_comments = item.metadata.pop("_comments", [])
+                for comment in ref_comments:
+                    if comment.url not in seen_urls:
+                        all_items.append(comment)
+                        seen_urls.add(comment.url)
+
+        logger.debug(f"Phase 2: Expanded to {len(all_items)} items")
+
+        # Phase 3: Extract keywords from primary ticket
+        logger.debug("Phase 3: Extracting keywords via AI")
         keywords = await self._extract_keywords(primary_item)
         logger.debug(f"Extracted keywords: {keywords}")
 
-        # Phase 3: Search all sources for ticket ID and keywords
-        logger.debug("Phase 3: Searching all sources")
-        search_queries = [ticket_id] + keywords[:5]  # Limit keywords
+        # Phase 4: Search OTHER sources for ticket ID and keywords
+        # Skip the primary source since we already have ticket + comments from Phase 1
+        logger.debug("Phase 4: Searching other sources for references")
+        search_queries = [ticket_id] + keywords[:3]  # Limit to 3 keywords
 
         for source_name in list_plugins():
+            # Skip the primary source - we already have everything from Phase 1
+            if source_name == primary_source:
+                continue
+
             client = self._get_source_client(source_name)
             if not client or not client.is_authenticated():
                 continue
@@ -155,28 +196,6 @@ class SearchAgent:
                     continue  # Skip failed searches
 
         logger.debug(f"Found {len(all_items)} items after source search")
-
-        # Phase 4: Multi-hop expansion (find referenced items)
-        logger.debug("Phase 4: Multi-hop reference expansion")
-        references = self._extract_references(all_items)
-        hop_count = 1
-        max_hops = self.config.ai.max_hops
-
-        while references and hop_count < max_hops:
-            new_references: list[tuple[str, str]] = []
-
-            for ref_type, ref_id in references:
-                item = await self._expand_reference(ref_type, ref_id)
-                if item and item.url not in seen_urls:
-                    all_items.append(item)
-                    seen_urls.add(item.url)
-                    # Extract references from new item
-                    new_refs = self._extract_references([item])
-                    new_references.extend(new_refs)
-
-            references = new_references
-            hop_count += 1
-            logger.debug(f"Hop {hop_count}: found {len(new_references)} new references")
 
         # Phase 5: Filter for relevance using AI
         logger.debug(f"Phase 5: Filtering {len(all_items)} items for relevance")
@@ -212,10 +231,12 @@ Example: authentication, OAuth2, API keys, enterprise SSO"""
                 temperature=0.3,
             )
             keywords_text = response.choices[0].message.content or ""
+            logger.debug(f"AI keyword extraction response: {keywords_text}")
             # Parse comma-separated keywords
             keywords = [k.strip() for k in keywords_text.split(",") if k.strip()]
             return keywords
-        except Exception:
+        except Exception as e:
+            logger.warning(f"AI keyword extraction failed: {e}, using fallback")
             # Fallback: extract simple keywords from title
             words = item.title.split()
             return [w for w in words if len(w) > 3 and w.isalnum()][:5]
@@ -310,14 +331,19 @@ Example: authentication, OAuth2, API keys, enterprise SSO"""
         ticket_id = primary.title.split(":")[0].strip() if ":" in primary.title else ""
         
         # Separate items into tiers
-        tier1_items = []  # Explicitly mention ticket ID
-        tier2_items = []  # From same sources as primary, or PRs/issues
-        tier3_items = []  # Everything else
+        tier1_items = []  # Explicitly mention ticket ID in title or content
+        tier2_items = []  # PRs, issues, tickets, comments (structured items)
+        tier3_items = []  # Everything else (messages, etc.)
         
         for item in items:
-            if ticket_id and ticket_id.upper() in item.title.upper():
+            # Tier 1: Items that explicitly mention the ticket ID
+            if ticket_id and (
+                ticket_id.upper() in item.title.upper() or
+                ticket_id.upper() in item.content[:500].upper()
+            ):
                 tier1_items.append(item)
-            elif item.item_type in ("pr", "issue", "ticket"):
+            # Tier 2: Structured items (PRs, issues, tickets, comments)
+            elif item.item_type in ("pr", "issue", "ticket", "comment"):
                 tier2_items.append(item)
             else:
                 tier3_items.append(item)
@@ -343,12 +369,24 @@ Example: authentication, OAuth2, API keys, enterprise SSO"""
             )
 
         prompt = f"""Given this primary ticket:
+Ticket ID: {ticket_id}
 Title: {primary.title}
 Description: {primary.content[:500]}
 
-Which of these items are relevant to understanding or implementing this ticket?
-Be inclusive - include items that discuss the same feature, related PRs, design discussions, etc.
-Return ONLY the numbers of relevant items, comma-separated.
+Which items are DIRECTLY relevant to implementing THIS SPECIFIC ticket ({ticket_id})?
+
+Include items that:
+- Explicitly reference {ticket_id} in the title or content
+- Are PRs, commits, or comments that implement {ticket_id}
+- Are comments or discussions specifically about {ticket_id}
+
+EXCLUDE items that:
+- Reference DIFFERENT ticket IDs (e.g., TA-xxx when looking for TB-xxx)
+- Are only tangentially related or share some keywords
+- Discuss separate features even if they touch similar code areas
+
+Return ONLY the numbers of directly relevant items, comma-separated.
+If unsure, err on the side of EXCLUDING the item.
 
 Items:
 {chr(10).join(summaries)}

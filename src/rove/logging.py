@@ -64,12 +64,37 @@ def get_performance_logger() -> logging.Logger:
     return _perf_logger
 
 
+def _parse_log_level(level_str: str) -> int:
+    """Parse a log level string to logging constant.
+
+    Args:
+        level_str: Log level name (debug, info, warning, error).
+
+    Returns:
+        Corresponding logging level constant.
+    """
+    levels = {
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+    }
+    return levels.get(level_str.lower(), logging.INFO)
+
+
 def _setup_main_logger() -> logging.Logger:
     """Set up the main application logger."""
     ensure_logs_dir()
 
+    # Import here to avoid circular imports
+    from .config import load_config
+
+    config = load_config()
+    file_level = _parse_log_level(config.logging.level)
+    console_level = _parse_log_level(config.logging.console_level)
+
     logger = logging.getLogger("rove")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG)  # Let handlers filter
 
     # Prevent duplicate handlers
     if logger.handlers:
@@ -82,7 +107,7 @@ def _setup_main_logger() -> logging.Logger:
         backupCount=3,
         encoding="utf-8",
     )
-    file_handler.setLevel(logging.DEBUG)
+    file_handler.setLevel(file_level)
     file_format = logging.Formatter(
         "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -90,9 +115,9 @@ def _setup_main_logger() -> logging.Logger:
     file_handler.setFormatter(file_format)
     logger.addHandler(file_handler)
 
-    # Console handler - only warnings and above
+    # Console handler
     console_handler = logging.StreamHandler(sys.stderr)
-    console_handler.setLevel(logging.WARNING)
+    console_handler.setLevel(console_level)
     console_format = logging.Formatter("%(levelname)s: %(message)s")
     console_handler.setFormatter(console_format)
     logger.addHandler(console_handler)

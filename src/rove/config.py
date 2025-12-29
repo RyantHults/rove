@@ -72,6 +72,14 @@ class CredentialsConfig:
 
 
 @dataclass
+class LoggingConfig:
+    """Logging configuration section."""
+
+    level: str = "info"  # "debug", "info", "warning", "error"
+    console_level: str = "warning"  # Level for console output
+
+
+@dataclass
 class RoveConfig:
     """Main configuration container."""
 
@@ -79,6 +87,7 @@ class RoveConfig:
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     ai: AIConfig = field(default_factory=AIConfig)
     credentials: CredentialsConfig = field(default_factory=CredentialsConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
 def ensure_rove_home() -> None:
@@ -141,6 +150,14 @@ def load_config() -> RoveConfig:
         if "backend" in cred_data:
             config.credentials.backend = cred_data["backend"]
 
+    # Merge logging section
+    if "logging" in data:
+        log_data = data["logging"]
+        if "level" in log_data:
+            config.logging.level = log_data["level"]
+        if "console_level" in log_data:
+            config.logging.console_level = log_data["console_level"]
+
     return config
 
 
@@ -185,6 +202,10 @@ def save_config(config: RoveConfig) -> None:
         },
         "credentials": {
             "backend": config.credentials.backend,
+        },
+        "logging": {
+            "level": config.logging.level,
+            "console_level": config.logging.console_level,
         },
     }
 
@@ -297,6 +318,15 @@ max_hops = 3
 # Credential storage backend: "auto", "keychain", "encrypted_file"
 # "auto" selects the best available option for your OS
 backend = "auto"
+
+[logging]
+# File logging level: "debug", "info", "warning", "error"
+# Debug includes detailed search phases and API calls
+level = "info"
+
+# Console logging level: "debug", "info", "warning", "error"
+# Default only shows warnings/errors to keep output clean
+console_level = "warning"
 '''
 
     SETTINGS_FILE.write_text(commented_config)

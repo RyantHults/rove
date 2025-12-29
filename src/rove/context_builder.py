@@ -48,6 +48,66 @@ def find_project_root() -> Path:
 class ContextBuilder:
     """Builds context markdown documents from gathered items."""
 
+    def _parse_existing_urls(self, content: str) -> set[str]:
+        """Extract URLs of items already in the context file.
+
+        Parses the References section and content to find URLs of included items.
+
+        Args:
+            content: The existing markdown content.
+
+        Returns:
+            Set of URLs already in the file.
+        """
+        urls = set()
+
+        # Parse references section: [1]: https://... "title"
+        ref_pattern = r'\[\d+\]:\s+(https?://[^\s"]+)'
+        for match in re.finditer(ref_pattern, content):
+            urls.add(match.group(1))
+
+        # Extract JIRA ticket URLs (browse links)
+        jira_pattern = r'https?://[^\s<>\[\]"\']+/browse/[A-Z]+-\d+'
+        for match in re.finditer(jira_pattern, content):
+            urls.add(match.group(0))
+
+        # Extract GitHub PR/issue URLs
+        github_pattern = r'https?://github\.com/[^\s<>\[\]"\']+/pull/\d+'
+        for match in re.finditer(github_pattern, content):
+            urls.add(match.group(0))
+
+        # Also detect tickets by their header pattern "### TICKET-123: Title"
+        # and construct expected URLs for them
+        ticket_header_pattern = r'### ([A-Z]+-\d+):'
+        for match in re.finditer(ticket_header_pattern, content):
+            ticket_id = match.group(1)
+            # Add a marker that we've seen this ticket (used for matching)
+            urls.add(f"__ticket__{ticket_id}")
+
+        return urls
+
+    def _item_in_existing(self, item: ContextItem, existing_urls: set[str]) -> bool:
+        """Check if an item is already in the existing content.
+
+        Args:
+            item: The context item to check.
+            existing_urls: Set of URLs/markers from existing file.
+
+        Returns:
+            True if item is already present.
+        """
+        # Direct URL match
+        if item.url in existing_urls:
+            return True
+
+        # Check ticket marker for primary tickets
+        if item.item_type == "ticket":
+            ticket_id = item.metadata.get("ticket_id", "")
+            if f"__ticket__{ticket_id}" in existing_urls:
+                return True
+
+        return False
+
     def __init__(self, db: Database, config: RoveConfig | None = None):
         """Initialize the context builder.
 
@@ -65,6 +125,7 @@ class ContextBuilder:
             self._ai_client = AsyncOpenAI(
                 base_url=self.config.ai.api_base,
                 api_key=self.config.ai.api_key or "dummy",
+                timeout=30.0,  # 30 second timeout for slow providers
             )
         return self._ai_client
 
@@ -109,25 +170,37 @@ class ContextBuilder:
         if existing_content:
             context_part = f"\n\nExisting content summary:\n{existing_content[:1000]}..."
 
-        prompt = f"""Identify duplicate or redundant information in these items.
-Items with the same information expressed differently should be grouped.
-Return the indices of items to KEEP (one from each group of duplicates).
+        prompt = f"""Review these items for a context document. Keep only HIGH-VALUE items.
+
+KEEP items that:
+- Provide unique, actionable information about the ticket
+- Are the primary ticket description or direct comments on it
+- Are PRs that explicitly implement this ticket
+- Contain technical decisions or implementation details
+
+DROP items that:
+- Duplicate information already in another item
+- Are only tangentially related (shared keywords but different purpose)
+- Reference different ticket IDs
+- Add no meaningful context beyond what's already captured
 {context_part}
 
 Items:
 {chr(10).join(summaries)}
 
-Return ONLY comma-separated indices of items to keep (e.g., "0, 2, 5"):"""
+Return ONLY comma-separated indices of items to KEEP (e.g., "0, 2, 5").
+Be aggressive - fewer high-quality items is better than many low-quality ones:"""
 
         try:
             client = self._get_ai_client()
             response = await client.chat.completions.create(
                 model=self.config.ai.model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=100,
+                max_tokens=300,
                 temperature=0.2,
             )
             response_text = response.choices[0].message.content or ""
+            logger.debug(f"Deduplication AI response: {response_text[:200]}")
 
             # Parse indices
             keep_indices: set[int] = set()
@@ -147,8 +220,9 @@ Return ONLY comma-separated indices of items to keep (e.g., "0, 2, 5"):"""
             return result
 
         except Exception as e:
-            logger.warning(f"AI deduplication failed, using all items: {e}")
-            return unique_items
+            logger.error(f"AI deduplication failed, dropping items to avoid pollution: {e}")
+            # Return empty list - caller should handle this
+            return []
 
     async def build(
         self,
@@ -186,16 +260,21 @@ Return ONLY comma-separated indices of items to keep (e.g., "0, 2, 5"):"""
                 logger.debug(f"Using project root: {project_root}")
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            # Check for existing content for deduplication
+            # Check for existing content
             existing_content: str | None = None
+            existing_urls: set[str] = set()
             existing_record = await self.db.get_context_file(ticket_id)
-            
+
             # Reuse existing filename if it exists, otherwise generate new one
             if existing_record:
                 filename = existing_record.filename
                 existing_path = output_dir / filename
                 if existing_path.exists():
                     existing_content = existing_path.read_text()
+                    existing_urls = self._parse_existing_urls(existing_content)
+                    logger.debug(
+                        f"Found existing file with {len(existing_urls)} items"
+                    )
                 # Use existing keywords for database update
                 keywords = existing_record.keywords
             else:
@@ -204,22 +283,59 @@ Return ONLY comma-separated indices of items to keep (e.g., "0, 2, 5"):"""
                 keywords = await self._extract_keywords(items)
                 keywords_slug = "_".join(keywords[:4])
                 filename = f"{ticket_id}_{keywords_slug}.md"
-            
+
             output_path = output_dir / filename
 
-            # Deduplicate items (AI semantic + URL-based)
+            # Filter out items already in the existing file
+            if existing_urls:
+                original_count = len(items)
+                items = [
+                    item for item in items
+                    if not self._item_in_existing(item, existing_urls)
+                ]
+                logger.debug(
+                    f"Filtered to {len(items)} new items "
+                    f"({original_count - len(items)} already in file)"
+                )
+                timer.add_metric("items_already_present", original_count - len(items))
+
+            # If no new items and file exists, we're done
+            if not items and existing_content:
+                logger.info(f"No new items to add to {filename}")
+                timer.add_metric("items_after_dedup", 0)
+                timer.add_metric("new_items_added", 0)
+                return filename
+
+            # Deduplicate new items among themselves
             logger.debug("Deduplicating items")
             items = await self.deduplicate_items(items, existing_content)
             timer.add_metric("items_after_dedup", len(items))
+
+            if not items:
+                if existing_content:
+                    logger.info(f"No new items to add to {filename}")
+                    return filename
+                raise ValueError(
+                    "AI deduplication failed - no items to include. "
+                    "Check logs for details and try again."
+                )
 
             # Group items by topic
             logger.debug("Grouping items by topic via AI")
             grouped = await self._group_by_topic(items)
             timer.add_metric("topic_count", len(grouped))
 
-            # Generate markdown
-            logger.debug("Generating markdown document")
-            markdown = self._generate_markdown(ticket_id, items, grouped)
+            # Generate or append markdown
+            if existing_content:
+                logger.debug("Appending new items to existing document")
+                markdown = self._append_to_existing(
+                    existing_content, ticket_id, items, grouped
+                )
+                timer.add_metric("new_items_added", len(items))
+            else:
+                logger.debug("Generating new markdown document")
+                markdown = self._generate_markdown(ticket_id, items, grouped)
+
             timer.add_metric("markdown_bytes", len(markdown))
 
             # Write file
@@ -368,6 +484,138 @@ Groups (JSON only):"""
         }
         return mapping.get(item_type, "Other Context")
 
+    def _append_to_existing(
+        self,
+        existing_content: str,
+        ticket_id: str,
+        new_items: list[ContextItem],
+        grouped: dict[str, list[ContextItem]],
+    ) -> str:
+        """Append new items to an existing context document.
+
+        Preserves existing content and adds new items to appropriate sections.
+
+        Args:
+            existing_content: The existing markdown content.
+            ticket_id: The primary ticket ID.
+            new_items: New items to add.
+            grouped: New items grouped by topic.
+
+        Returns:
+            The updated markdown content.
+        """
+        # Find the highest existing reference number
+        ref_pattern = r'\[(\d+)\]:'
+        existing_refs = [int(m.group(1)) for m in re.finditer(ref_pattern, existing_content)]
+        next_ref_num = max(existing_refs) + 1 if existing_refs else 1
+
+        # Find insertion point - before "---" separator (Sources section)
+        separator_match = re.search(r'\n---\n', existing_content)
+        if not separator_match:
+            # No separator found, append at end
+            insert_pos = len(existing_content)
+            footer = ""
+        else:
+            insert_pos = separator_match.start()
+            footer = existing_content[separator_match.start():]
+
+        # Get content before footer
+        main_content = existing_content[:insert_pos].rstrip()
+
+        # Build new section content
+        new_lines: list[str] = []
+        new_references: list[tuple[int, str, str]] = []
+
+        for topic, topic_items in grouped.items():
+            # Check if this section already exists
+            section_header = f"## {topic}"
+            if section_header in main_content:
+                # Find where to insert within existing section
+                # For now, we'll add a separator and append
+                new_lines.append("")
+                new_lines.append(f"### New additions to {topic}")
+                new_lines.append("")
+            else:
+                # New section
+                new_lines.append("")
+                new_lines.append(section_header)
+                new_lines.append("")
+
+            for item in topic_items:
+                # Item header with reference (all items get references)
+                new_lines.append(f"### {item.title} [{next_ref_num}]")
+                new_references.append(
+                    (next_ref_num, item.url, f"{item.source}: {item.title}")
+                )
+                next_ref_num += 1
+
+                new_lines.append("")
+
+                # Format content
+                content = item.content.strip()
+                content_lines = content.split("\n")
+
+                if item.item_type in ("ticket", "comment") and len(content) > 200:
+                    new_lines.append(content)
+                else:
+                    for content_line in content_lines:
+                        new_lines.append(f"> {content_line}")
+
+                new_lines.append("")
+
+                # Attribution
+                timestamp = item.timestamp.strftime("%b %d, %Y")
+                new_lines.append(
+                    f"— *{item.author} via {item.source.upper()}, {timestamp}*"
+                )
+                new_lines.append("")
+
+        # Rebuild the document
+        result = main_content + "\n".join(new_lines)
+
+        # Update Sources table with new counts
+        if footer:
+            # Parse existing source counts from table
+            table_pattern = r'\| (\w+) \| (\d+) \|'
+            source_counts: dict[str, int] = {}
+            for match in re.finditer(table_pattern, footer):
+                source_counts[match.group(1).lower()] = int(match.group(2))
+
+            # Add new item counts
+            for item in new_items:
+                source_counts[item.source] = source_counts.get(item.source, 0) + 1
+
+            # Rebuild footer
+            footer_lines = ["", "---", "", "## Sources Consulted", ""]
+            footer_lines.append("| Source | Items Found | Last Updated |")
+            footer_lines.append("|--------|-------------|--------------|")
+
+            today = datetime.now(UTC).strftime("%Y-%m-%d")
+            for source, count in sorted(source_counts.items()):
+                footer_lines.append(f"| {source.upper()} | {count} | {today} |")
+
+            footer_lines.append("")
+
+            # Add existing references
+            ref_section_match = re.search(r'## References\n\n(.*)', footer, re.DOTALL)
+            if ref_section_match:
+                footer_lines.append("## References")
+                footer_lines.append("")
+                footer_lines.append(ref_section_match.group(1).strip())
+
+            # Add new references
+            if new_references:
+                if not ref_section_match:
+                    footer_lines.append("## References")
+                    footer_lines.append("")
+                for num, url, title in new_references:
+                    footer_lines.append(f'[{num}]: {url} "{title}"')
+                footer_lines.append("")
+
+            result += "\n".join(footer_lines)
+
+        return result
+
     def _generate_markdown(
         self,
         ticket_id: str,
@@ -405,20 +653,28 @@ Groups (JSON only):"""
             lines.append("")
 
             for item in topic_items:
-                # Item content
-                if item.item_type == "ticket":
-                    lines.append(f"### {item.title}")
-                else:
-                    lines.append(f"### {item.title} [{ref_num}]")
-                    references.append((ref_num, item.url, f"{item.source}: {item.title}"))
-                    ref_num += 1
+                # Item header with reference (all items get references now)
+                lines.append(f"### {item.title} [{ref_num}]")
+                references.append(
+                    (ref_num, item.url, f"{item.source}: {item.title}")
+                )
+                ref_num += 1
 
                 lines.append("")
 
-                # Quote the content
-                content_lines = item.content.strip().split("\n")
-                for content_line in content_lines[:20]:  # Limit lines
-                    lines.append(f"> {content_line}")
+                # Format content based on item type
+                content = item.content.strip()
+                content_lines = content.split("\n")
+
+                # For tickets/comments with structured content, render as-is
+                # For shorter content (PRs, messages), use blockquote
+                if item.item_type in ("ticket", "comment") and len(content) > 200:
+                    # Render structured content directly (it's already markdown)
+                    lines.append(content)
+                else:
+                    # Use blockquote for shorter items
+                    for content_line in content_lines:
+                        lines.append(f"> {content_line}")
 
                 lines.append("")
 
