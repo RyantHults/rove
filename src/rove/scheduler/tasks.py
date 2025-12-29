@@ -1,4 +1,4 @@
-"""Background task scheduling for Glean.
+"""Background task scheduling for Rove.
 
 Handles automatic context refresh and task queue management.
 """
@@ -10,7 +10,7 @@ from typing import Callable
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 
-from ..config import DATABASE_FILE, GleanConfig, load_config, parse_duration
+from ..config import DATABASE_FILE, RoveConfig, load_config, parse_duration
 from ..context_builder import ContextBuilder
 from ..database import Database, utc_now
 from ..logging import PerformanceTimer, get_logger
@@ -20,10 +20,10 @@ from ..search_agent import SearchAgent
 logger = get_logger("scheduler")
 
 
-class GleanScheduler:
+class RoveScheduler:
     """Background scheduler for context refresh tasks."""
 
-    def __init__(self, config: GleanConfig | None = None):
+    def __init__(self, config: RoveConfig | None = None):
         """Initialize the scheduler.
 
         Args:
@@ -143,7 +143,7 @@ class GleanScheduler:
                 )
                 logger.warning(
                     f"Task {task.id} needs re-authentication: {task.ticket_id}. "
-                    "Run 'glean --add-source <source>' to re-authenticate."
+                    "Run 'rove --add-source <source>' to re-authenticate."
                 )
 
             except Exception as e:
@@ -217,7 +217,7 @@ class GleanScheduler:
 
 async def run_scheduler() -> None:
     """Run the scheduler as a standalone process."""
-    scheduler = GleanScheduler()
+    scheduler = RoveScheduler()
     await scheduler.start()
 
     try:

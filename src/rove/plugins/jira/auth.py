@@ -21,7 +21,7 @@ ATLASSIAN_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-reso
 
 # OAuth configuration - these would typically be registered app credentials
 # For a real app, these should be configurable or registered
-DEFAULT_CLIENT_ID = "glean-jira-integration"
+DEFAULT_CLIENT_ID = "rove-jira-integration"
 REDIRECT_URI = "http://localhost:8765/callback"
 SCOPES = [
     "read:jira-work",
@@ -39,6 +39,15 @@ class OAuthTokens:
     expires_at: datetime
     cloud_id: str  # Atlassian Cloud site ID
     site_url: str  # The JIRA site URL
+
+
+@dataclass
+class ApiTokenCredentials:
+    """Container for API token credentials."""
+
+    email: str
+    api_token: str
+    site_url: str  # The JIRA site URL (e.g., https://yourcompany.atlassian.net)
 
 
 def generate_pkce_pair() -> tuple[str, str]:

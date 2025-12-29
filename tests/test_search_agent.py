@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from glean.config import GleanConfig
-from glean.plugins.base import AuthenticationError, ContextItem
-from glean.search_agent import SearchAgent
+from rove.config import RoveConfig
+from rove.plugins.base import AuthenticationError, ContextItem
+from rove.search_agent import SearchAgent
 
 
 @pytest.fixture
-def search_agent(mock_config: GleanConfig) -> SearchAgent:
+def search_agent(mock_config: RoveConfig) -> SearchAgent:
     """Create a SearchAgent for testing."""
     return SearchAgent(mock_config)
 
@@ -159,7 +159,7 @@ class TestExpandReference:
     ):
         """Test expanding a ticket reference."""
         with patch(
-            "glean.search_agent.list_plugins", return_value=["jira"]
+            "rove.search_agent.list_plugins", return_value=["jira"]
         ), patch.object(
             search_agent, "_get_source_client", return_value=mock_source_client
         ):
@@ -177,7 +177,7 @@ class TestExpandReference:
         """Test that unsupported reference types return None."""
         # Mock client only supports "ticket", not "unknown"
         with patch(
-            "glean.search_agent.list_plugins", return_value=["jira"]
+            "rove.search_agent.list_plugins", return_value=["jira"]
         ), patch.object(
             search_agent, "_get_source_client", return_value=mock_source_client
         ):
@@ -199,7 +199,7 @@ class TestSearch:
     ):
         """Test that search returns context items."""
         with patch(
-            "glean.search_agent.list_plugins", return_value=["jira"]
+            "rove.search_agent.list_plugins", return_value=["jira"]
         ), patch.object(
             search_agent, "_get_source_client", return_value=mock_source_client
         ), patch.object(
@@ -222,7 +222,7 @@ class TestSearch:
         until = datetime(2024, 12, 31)
 
         with patch(
-            "glean.search_agent.list_plugins", return_value=["jira"]
+            "rove.search_agent.list_plugins", return_value=["jira"]
         ), patch.object(
             search_agent, "_get_source_client", return_value=mock_source_client
         ), patch.object(
@@ -247,7 +247,7 @@ class TestSearch:
         mock_client.authenticate = AsyncMock(return_value=False)
 
         with patch(
-            "glean.search_agent.list_plugins", return_value=["jira"]
+            "rove.search_agent.list_plugins", return_value=["jira"]
         ), patch.object(
             search_agent, "_get_source_client", return_value=mock_client
         ):

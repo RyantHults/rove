@@ -165,6 +165,10 @@ uv.lock
 # These are stored in the project root and contain user data
 .context/
 
+# Rove-specific: Settings and runtime data
+# Stored in the current working directory
+.rove/
+
 # Glean-specific: Local test databases
 # Note: Production database is in ~/.glean/glean.db (outside project)
 *.db
@@ -187,3 +191,4 @@ logs/
 *.sock
 *.pid
 
+CLAUDE.md

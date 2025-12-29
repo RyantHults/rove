@@ -25,7 +25,7 @@ GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_API_BASE = "https://api.github.com"
 
 # Default OAuth settings
-DEFAULT_CLIENT_ID = "glean-github-integration"
+DEFAULT_CLIENT_ID = "rove-github-integration"
 DEFAULT_CLIENT_SECRET = ""
 REDIRECT_URI = "http://localhost:8767/callback"
 SCOPES = ["repo", "read:org"]
@@ -44,6 +44,7 @@ class GitHubContextClient(ContextClient):
         self.config = {**self.DEFAULT_CONFIG, **config}
         self._access_token: str | None = None
         self._username: str | None = None
+        self._auth_method: str = "oauth"  # "oauth" or "pat"
         self._client_id = config.get("client_id", DEFAULT_CLIENT_ID)
         self._client_secret = config.get("client_secret", DEFAULT_CLIENT_SECRET)
         self._default_owner = config.get("default_owner")
@@ -56,6 +57,7 @@ class GitHubContextClient(ContextClient):
         if creds:
             self._access_token = creds.get("access_token")
             self._username = creds.get("username")
+            self._auth_method = creds.get("auth_method", "oauth")
             self._default_owner = creds.get("default_owner") or self._default_owner
             self._default_repo = creds.get("default_repo") or self._default_repo
 
@@ -67,6 +69,7 @@ class GitHubContextClient(ContextClient):
                 {
                     "access_token": self._access_token,
                     "username": self._username,
+                    "auth_method": self._auth_method,
                     "default_owner": self._default_owner,
                     "default_repo": self._default_repo,
                 },
@@ -142,19 +145,38 @@ class GitHubContextClient(ContextClient):
         ]
 
     async def authenticate(self, credentials: dict | None = None) -> bool:
-        """Authenticate with GitHub via OAuth."""
+        """Authenticate with GitHub via OAuth or Personal Access Token.
+
+        Args:
+            credentials: Optional pre-existing credentials dict.
+                        For OAuth: {"access_token": ..., "username": ...}
+                        For PAT: {"access_token": ..., "username": ...} (same format)
+
+        Returns:
+            True if authentication succeeded.
+        """
         if credentials:
             self._access_token = credentials.get("access_token")
             self._username = credentials.get("username")
+            self._auth_method = credentials.get("auth_method", "oauth")
             self._save_credentials()
             return bool(self._access_token)
 
-        # Perform OAuth flow
-        tokens = await self._perform_oauth_flow()
-        if tokens:
-            self._access_token = tokens["access_token"]
+        # Interactive authentication - prompt user for method
+        import click
 
-            # Fetch username
+        click.echo("\nChoose authentication method:")
+        click.echo("1. OAuth (requires OAuth app registration)")
+        click.echo("2. Personal Access Token (simpler, no app registration needed)")
+        choice = click.prompt("Enter choice", type=click.Choice(["1", "2"]), default="2")
+
+        if choice == "2":
+            # Personal Access Token authentication
+            pat = click.prompt("Enter your GitHub Personal Access Token", hide_input=True)
+            self._access_token = pat
+            self._auth_method = "pat"
+
+            # Fetch username to verify token
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     f"{GITHUB_API_BASE}/user",
@@ -165,10 +187,35 @@ class GitHubContextClient(ContextClient):
                 )
                 if response.status_code == 200:
                     self._username = response.json().get("login")
+                    click.echo(f"✓ Authenticated as {self._username}")
+                else:
+                    click.echo("✗ Invalid token. Please check your Personal Access Token.")
+                    return False
 
             self._save_credentials()
             return True
-        return False
+        else:
+            # Perform OAuth flow
+            tokens = await self._perform_oauth_flow()
+            if tokens:
+                self._access_token = tokens["access_token"]
+                self._auth_method = "oauth"
+
+                # Fetch username
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{GITHUB_API_BASE}/user",
+                        headers={
+                            "Authorization": f"Bearer {self._access_token}",
+                            "Accept": "application/vnd.github+json",
+                        },
+                    )
+                    if response.status_code == 200:
+                        self._username = response.json().get("login")
+
+                self._save_credentials()
+                return True
+            return False
 
     async def _perform_oauth_flow(self) -> dict | None:
         """Perform GitHub OAuth flow."""

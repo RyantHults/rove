@@ -25,7 +25,7 @@ SLACK_TOKEN_URL = "https://slack.com/api/oauth.v2.access"
 SLACK_API_BASE = "https://slack.com/api"
 
 # Default OAuth settings - would be configured per installation
-DEFAULT_CLIENT_ID = "glean-slack-integration"
+DEFAULT_CLIENT_ID = "rove-slack-integration"
 DEFAULT_CLIENT_SECRET = ""  # Would be configured
 REDIRECT_URI = "http://localhost:8766/callback"
 SCOPES = [

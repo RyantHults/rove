@@ -1,8 +1,8 @@
-"""Logging configuration for Glean.
+"""Logging configuration for Rove.
 
 Provides structured logging with separate handlers for:
-- Error/debug logs: ~/.glean/logs/glean.log
-- Performance logs: ~/.glean/logs/performance.log
+- Error/debug logs: ./.rove/logs/rove.log (in current working directory)
+- Performance logs: ./.rove/logs/performance.log (in current working directory)
 """
 
 import logging
@@ -12,13 +12,13 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-from .config import GLEAN_HOME
+from .config import ROVE_HOME
 
 # Log directory
-LOGS_DIR = GLEAN_HOME / "logs"
+LOGS_DIR = ROVE_HOME / "logs"
 
 # Log files
-ERROR_LOG = LOGS_DIR / "glean.log"
+ERROR_LOG = LOGS_DIR / "rove.log"
 PERFORMANCE_LOG = LOGS_DIR / "performance.log"
 
 # Loggers
@@ -31,7 +31,7 @@ def ensure_logs_dir() -> None:
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def get_logger(name: str = "glean") -> logging.Logger:
+def get_logger(name: str = "rove") -> logging.Logger:
     """Get or create the main application logger.
 
     Args:
@@ -45,7 +45,7 @@ def get_logger(name: str = "glean") -> logging.Logger:
     if _main_logger is None:
         _main_logger = _setup_main_logger()
 
-    return logging.getLogger(f"glean.{name}" if name != "glean" else "glean")
+    return logging.getLogger(f"rove.{name}" if name != "rove" else "rove")
 
 
 def get_performance_logger() -> logging.Logger:
@@ -68,7 +68,7 @@ def _setup_main_logger() -> logging.Logger:
     """Set up the main application logger."""
     ensure_logs_dir()
 
-    logger = logging.getLogger("glean")
+    logger = logging.getLogger("rove")
     logger.setLevel(logging.DEBUG)
 
     # Prevent duplicate handlers
@@ -104,7 +104,7 @@ def _setup_performance_logger() -> logging.Logger:
     """Set up the performance logger."""
     ensure_logs_dir()
 
-    logger = logging.getLogger("glean.performance")
+    logger = logging.getLogger("rove.performance")
     logger.setLevel(logging.INFO)
 
     # Prevent duplicate handlers

@@ -3,6 +3,7 @@
 Provides full access to JIRA tickets, comments, and related data.
 """
 
+import base64
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -16,6 +17,7 @@ from ..base import (
     store_credentials,
 )
 from .auth import (
+    ApiTokenCredentials,
     DEFAULT_CLIENT_ID,
     OAuthTokens,
     perform_oauth_flow,
@@ -40,6 +42,8 @@ class JiraContextClient(ContextClient):
         """
         self.config = {**self.DEFAULT_CONFIG, **config}
         self._tokens: OAuthTokens | None = None
+        self._api_credentials: ApiTokenCredentials | None = None
+        self._auth_method: str = "oauth"  # "oauth" or "api_token"
         self._client_id = config.get("client_id", DEFAULT_CLIENT_ID)
         self._load_stored_credentials()
 
@@ -47,20 +51,44 @@ class JiraContextClient(ContextClient):
         """Load credentials from keyring if available."""
         creds = get_credentials("jira")
         if creds:
-            try:
-                self._tokens = OAuthTokens(
-                    access_token=creds["access_token"],
-                    refresh_token=creds.get("refresh_token"),
-                    expires_at=datetime.fromisoformat(creds["expires_at"]),
-                    cloud_id=creds["cloud_id"],
-                    site_url=creds["site_url"],
-                )
-            except (KeyError, ValueError):
-                self._tokens = None
+            # Check if it's API token auth or OAuth
+            if "email" in creds and "api_token" in creds:
+                # API token authentication
+                try:
+                    self._api_credentials = ApiTokenCredentials(
+                        email=creds["email"],
+                        api_token=creds["api_token"],
+                        site_url=creds["site_url"],
+                    )
+                    self._auth_method = "api_token"
+                except (KeyError, ValueError):
+                    self._api_credentials = None
+            else:
+                # OAuth authentication
+                try:
+                    self._tokens = OAuthTokens(
+                        access_token=creds["access_token"],
+                        refresh_token=creds.get("refresh_token"),
+                        expires_at=datetime.fromisoformat(creds["expires_at"]),
+                        cloud_id=creds["cloud_id"],
+                        site_url=creds["site_url"],
+                    )
+                    self._auth_method = "oauth"
+                except (KeyError, ValueError):
+                    self._tokens = None
 
     def _save_credentials(self) -> None:
-        """Save current tokens to keyring."""
-        if self._tokens:
+        """Save current credentials to keyring."""
+        if self._auth_method == "api_token" and self._api_credentials:
+            store_credentials(
+                "jira",
+                {
+                    "email": self._api_credentials.email,
+                    "api_token": self._api_credentials.api_token,
+                    "site_url": self._api_credentials.site_url,
+                },
+            )
+        elif self._auth_method == "oauth" and self._tokens:
             store_credentials(
                 "jira",
                 {
@@ -73,11 +101,14 @@ class JiraContextClient(ContextClient):
             )
 
     async def _ensure_valid_token(self) -> bool:
-        """Ensure we have a valid access token, refreshing if needed.
+        """Ensure we have valid credentials, refreshing OAuth token if needed.
 
         Returns:
-            True if we have a valid token.
+            True if we have valid credentials.
         """
+        if self._auth_method == "api_token":
+            return self._api_credentials is not None
+
         if not self._tokens:
             return False
 
@@ -104,6 +135,7 @@ class JiraContextClient(ContextClient):
                 cloud_id=self._tokens.cloud_id,
                 site_url=self._tokens.site_url,
             )
+            # Note: site_url is preserved from existing tokens
             self._save_credentials()
             return True
         except httpx.HTTPStatusError:
@@ -111,9 +143,24 @@ class JiraContextClient(ContextClient):
 
     def _get_api_base(self) -> str:
         """Get the JIRA API base URL."""
-        if not self._tokens:
-            raise RuntimeError("Not authenticated")
-        return f"https://api.atlassian.com/ex/jira/{self._tokens.cloud_id}"
+        if self._auth_method == "api_token" and self._api_credentials:
+            # For API token auth, use the site URL directly
+            base = self._api_credentials.site_url.rstrip("/")
+            return f"{base}/rest/api/3"
+        elif self._auth_method == "oauth" and self._tokens:
+            return f"https://api.atlassian.com/ex/jira/{self._tokens.cloud_id}"
+        raise RuntimeError("Not authenticated")
+
+    def _get_auth_header(self) -> dict[str, str]:
+        """Get the appropriate authorization header for the current auth method."""
+        if self._auth_method == "api_token" and self._api_credentials:
+            # Basic Auth: email:api_token base64 encoded
+            credentials = f"{self._api_credentials.email}:{self._api_credentials.api_token}"
+            encoded = base64.b64encode(credentials.encode()).decode()
+            return {"Authorization": f"Basic {encoded}"}
+        elif self._auth_method == "oauth" and self._tokens:
+            return {"Authorization": f"Bearer {self._tokens.access_token}"}
+        raise RuntimeError("Not authenticated")
 
     def source_name(self) -> str:
         """Return human-readable name."""
@@ -178,39 +225,87 @@ class JiraContextClient(ContextClient):
         ]
 
     async def authenticate(self, credentials: dict | None = None) -> bool:
-        """Authenticate with JIRA via OAuth.
+        """Authenticate with JIRA via OAuth or API token.
 
         Args:
             credentials: Optional pre-existing credentials dict.
+                        For OAuth: {"access_token": ..., "refresh_token": ..., "expires_at": ..., "cloud_id": ..., "site_url": ...}
+                        For API token: {"email": ..., "api_token": ..., "site_url": ...}
 
         Returns:
             True if authentication succeeded.
         """
         if credentials:
-            # Use provided credentials
-            try:
-                self._tokens = OAuthTokens(
-                    access_token=credentials["access_token"],
-                    refresh_token=credentials.get("refresh_token"),
-                    expires_at=datetime.fromisoformat(credentials["expires_at"]),
-                    cloud_id=credentials["cloud_id"],
-                    site_url=credentials["site_url"],
-                )
-                self._save_credentials()
-                return True
-            except (KeyError, ValueError):
-                return False
+            # Check if it's API token or OAuth credentials
+            if "email" in credentials and "api_token" in credentials:
+                # API token authentication
+                try:
+                    self._api_credentials = ApiTokenCredentials(
+                        email=credentials["email"],
+                        api_token=credentials["api_token"],
+                        site_url=credentials["site_url"],
+                    )
+                    self._auth_method = "api_token"
+                    self._save_credentials()
+                    return True
+                except (KeyError, ValueError):
+                    return False
+            else:
+                # OAuth authentication
+                try:
+                    self._tokens = OAuthTokens(
+                        access_token=credentials["access_token"],
+                        refresh_token=credentials.get("refresh_token"),
+                        expires_at=datetime.fromisoformat(credentials["expires_at"]),
+                        cloud_id=credentials["cloud_id"],
+                        site_url=credentials["site_url"],
+                    )
+                    self._auth_method = "oauth"
+                    self._save_credentials()
+                    return True
+                except (KeyError, ValueError):
+                    return False
 
-        # Perform OAuth flow
-        tokens = await perform_oauth_flow(self._client_id)
-        if tokens:
-            self._tokens = tokens
+        # Interactive authentication - prompt user for method
+        import click
+
+        click.echo("\nChoose authentication method:")
+        click.echo("1. OAuth (requires OAuth app registration)")
+        click.echo("2. API Token (simpler, no app registration needed)")
+        choice = click.prompt("Enter choice", type=click.Choice(["1", "2"]), default="2")
+
+        if choice == "2":
+            # API token authentication
+            email = click.prompt("Enter your JIRA email address")
+            api_token = click.prompt("Enter your JIRA API token", hide_input=True)
+            site_url = click.prompt(
+                "Enter your JIRA site URL (e.g., https://yourcompany.atlassian.net)"
+            )
+
+            # Normalize site URL
+            if not site_url.startswith("http"):
+                site_url = f"https://{site_url}"
+
+            self._api_credentials = ApiTokenCredentials(
+                email=email, api_token=api_token, site_url=site_url
+            )
+            self._auth_method = "api_token"
             self._save_credentials()
             return True
-        return False
+        else:
+            # Perform OAuth flow
+            tokens = await perform_oauth_flow(self._client_id)
+            if tokens:
+                self._tokens = tokens
+                self._auth_method = "oauth"
+                self._save_credentials()
+                return True
+            return False
 
     def is_authenticated(self) -> bool:
         """Check if currently authenticated."""
+        if self._auth_method == "api_token":
+            return self._api_credentials is not None
         return self._tokens is not None
 
     async def test_connection(self) -> bool:
@@ -220,10 +315,9 @@ class JiraContextClient(ContextClient):
 
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self._get_api_base()}/rest/api/3/myself",
-                    headers={"Authorization": f"Bearer {self._tokens.access_token}"},
-                )
+                # Use the appropriate endpoint based on auth method
+                url = f"{self._get_api_base()}/myself"
+                response = await client.get(url, headers=self._get_auth_header())
                 return response.status_code == 200
         except httpx.HTTPError:
             return False
@@ -272,8 +366,8 @@ class JiraContextClient(ContextClient):
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    f"{self._get_api_base()}/rest/api/3/search",
-                    headers={"Authorization": f"Bearer {self._tokens.access_token}"},
+                    f"{self._get_api_base()}/search",
+                    headers=self._get_auth_header(),
                     params={
                         "jql": jql,
                         "maxResults": self.config["page_size"],
@@ -305,8 +399,8 @@ class JiraContextClient(ContextClient):
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    f"{self._get_api_base()}/rest/api/3/issue/{item_id}",
-                    headers={"Authorization": f"Bearer {self._tokens.access_token}"},
+                    f"{self._get_api_base()}/issue/{item_id}",
+                    headers=self._get_auth_header(),
                     params={
                         "fields": "summary,description,comment,labels,issuelinks,created,updated,creator",
                         "expand": "renderedFields",
@@ -324,6 +418,8 @@ class JiraContextClient(ContextClient):
         """Clear stored credentials."""
         delete_credentials("jira")
         self._tokens = None
+        self._api_credentials = None
+        self._auth_method = "oauth"
 
     def supported_reference_types(self) -> list[str]:
         """Return list of reference types this plugin can resolve."""
@@ -354,7 +450,11 @@ class JiraContextClient(ContextClient):
                 item_type="ticket",
                 title=f"{key}: {fields.get('summary', '')}",
                 content=description,
-                url=f"{self._tokens.site_url}/browse/{key}" if self._tokens else "",
+                url=(
+                    f"{self._api_credentials.site_url}/browse/{key}"
+                    if self._auth_method == "api_token" and self._api_credentials
+                    else f"{self._tokens.site_url}/browse/{key}" if self._tokens else ""
+                ),
                 timestamp=datetime.fromisoformat(
                     fields.get("updated", fields.get("created", "")).replace("Z", "+00:00")
                 ),
@@ -377,9 +477,13 @@ class JiraContextClient(ContextClient):
                     item_type="comment",
                     title=f"Comment on {key}",
                     content=comment_text,
-                    url=f"{self._tokens.site_url}/browse/{key}?focusedCommentId={comment.get('id', '')}"
-                    if self._tokens
-                    else "",
+                    url=(
+                        f"{self._api_credentials.site_url}/browse/{key}?focusedCommentId={comment.get('id', '')}"
+                        if self._auth_method == "api_token" and self._api_credentials
+                        else f"{self._tokens.site_url}/browse/{key}?focusedCommentId={comment.get('id', '')}"
+                        if self._tokens
+                        else ""
+                    ),
                     timestamp=datetime.fromisoformat(
                         comment.get("updated", comment.get("created", "")).replace(
                             "Z", "+00:00"

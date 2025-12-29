@@ -1,4 +1,4 @@
-"""API server module for Glean."""
+"""API server module for Rove."""
 
 from .server import run_server
 

@@ -1,6 +1,6 @@
-"""Configuration management for Glean.
+"""Configuration management for Rove.
 
-Settings are loaded from ~/.glean/settings.toml with the following precedence:
+Settings are loaded from ./.rove/settings.toml (in the current working directory) with the following precedence:
 1. CLI flags (highest)
 2. Config file
 3. Built-in defaults (lowest)
@@ -12,12 +12,12 @@ from typing import Any
 
 import toml
 
-# Default paths
-GLEAN_HOME = Path.home() / ".glean"
-SETTINGS_FILE = GLEAN_HOME / "settings.toml"
-DATABASE_FILE = GLEAN_HOME / "glean.db"
-API_SOCKET = GLEAN_HOME / "api.sock"
-PID_FILE = GLEAN_HOME / "glean.pid"
+# Default paths - stored in current working directory
+ROVE_HOME = Path.cwd() / ".rove"
+SETTINGS_FILE = ROVE_HOME / "settings.toml"
+DATABASE_FILE = ROVE_HOME / "rove.db"
+API_SOCKET = ROVE_HOME / "api.sock"
+PID_FILE = ROVE_HOME / "rove.pid"
 
 
 @dataclass
@@ -70,7 +70,7 @@ class CredentialsConfig:
 
 
 @dataclass
-class GleanConfig:
+class RoveConfig:
     """Main configuration container."""
 
     sources: SourcesConfig = field(default_factory=SourcesConfig)
@@ -79,14 +79,14 @@ class GleanConfig:
     credentials: CredentialsConfig = field(default_factory=CredentialsConfig)
 
 
-def ensure_glean_home() -> None:
-    """Create the Glean home directory if it doesn't exist."""
-    GLEAN_HOME.mkdir(parents=True, exist_ok=True)
+def ensure_rove_home() -> None:
+    """Create the Rove home directory if it doesn't exist."""
+    ROVE_HOME.mkdir(parents=True, exist_ok=True)
 
 
-def load_config() -> GleanConfig:
+def load_config() -> RoveConfig:
     """Load configuration from settings.toml, merging with defaults."""
-    config = GleanConfig()
+    config = RoveConfig()
 
     if not SETTINGS_FILE.exists():
         return config
@@ -138,9 +138,9 @@ def load_config() -> GleanConfig:
     return config
 
 
-def save_config(config: GleanConfig) -> None:
+def save_config(config: RoveConfig) -> None:
     """Save configuration to settings.toml."""
-    ensure_glean_home()
+    ensure_rove_home()
 
     data: dict[str, Any] = {
         "sources": {
@@ -148,14 +148,19 @@ def save_config(config: GleanConfig) -> None:
             "jira": {
                 "rate_limit": config.sources.jira.rate_limit,
                 "page_size": config.sources.jira.page_size,
+                "client_id": config.sources.jira.client_id,
             },
             "slack": {
                 "rate_limit": config.sources.slack.rate_limit,
                 "page_size": config.sources.slack.page_size,
+                "client_id": config.sources.slack.client_id,
+                "client_secret": config.sources.slack.client_secret,
             },
             "github": {
                 "rate_limit": config.sources.github.rate_limit,
                 "page_size": config.sources.github.page_size,
+                "client_id": config.sources.github.client_id,
+                "client_secret": config.sources.github.client_secret,
             },
         },
         "scheduler": {
@@ -185,47 +190,58 @@ def create_default_config() -> bool:
     Returns:
         True if a new config was created (first run), False if it already existed.
     """
-    ensure_glean_home()
+    ensure_rove_home()
 
     if SETTINGS_FILE.exists():
         return False
 
     # Write a well-commented config file for new users
-    commented_config = '''# Glean Configuration
-# This file configures the Glean context extraction service.
-# For more information, see: https://github.com/your-org/glean
+    commented_config = '''# Rove Configuration
+# This file configures the Rove context extraction service.
+# For more information, see: https://github.com/your-org/rove
 
 [sources]
 # The primary source for fetching ticket details
 default_ticket_source = "jira"
 
 # =============================================================================
-# IMPORTANT: OAuth Credentials
+# IMPORTANT: Authentication Options
 # =============================================================================
-# To use Slack or GitHub integrations, you must register OAuth apps and
-# provide your own client credentials below.
+# JIRA and GitHub support two authentication methods:
 #
-# JIRA (Atlassian Cloud):
-#   1. Go to https://developer.atlassian.com/console/myapps/
-#   2. Create an OAuth 2.0 app with "read:jira-work" scope
-#   3. Set callback URL to: http://localhost:8765/callback
+# 1. API Token (Recommended - simpler, no app registration needed)
+#    - JIRA: Use your email + API token (create at https://id.atlassian.com/manage-profile/security/api-tokens)
+#    - GitHub: Use a Personal Access Token (create at https://github.com/settings/tokens)
+#    - When you run "rove --add-source jira" or "rove --add-source github",
+#      choose option 2 to use API token authentication
 #
-# Slack:
-#   1. Go to https://api.slack.com/apps and create an app
-#   2. Add OAuth scopes: search:read, channels:read, channels:history
-#   3. Set redirect URL to: http://localhost:8766/callback
+# 2. OAuth (Requires app registration)
+#    - JIRA (Atlassian Cloud):
+#      1. Go to https://developer.atlassian.com/console/myapps/
+#      2. Create an OAuth 2.0 app with "read:jira-work" scope
+#      3. Set callback URL to: http://localhost:8765/callback
+#      4. Provide client_id below (client_secret not needed for PKCE flow)
 #
-# GitHub:
-#   1. Go to https://github.com/settings/developers
-#   2. Create an OAuth App
-#   3. Set callback URL to: http://localhost:8767/callback
+#    - GitHub:
+#      1. Go to https://github.com/settings/developers
+#      2. Create an OAuth App
+#      3. Set callback URL to: http://localhost:8767/callback
+#      4. Provide client_id and client_secret below
+#
+#    - Slack:
+#      1. Go to https://api.slack.com/apps and create an app
+#      2. Add OAuth scopes: search:read, channels:read, channels:history
+#      3. Set redirect URL to: http://localhost:8766/callback
+#      4. Provide client_id and client_secret below
 # =============================================================================
 
 [sources.jira]
 rate_limit = 100  # requests per minute
 page_size = 50    # items per API call
+# OAuth authentication (optional - API token is simpler)
 # client_id = "your-atlassian-client-id"
 # client_secret = ""  # Not needed for PKCE flow
+# Note: For API token auth, credentials are stored securely via keyring
 
 [sources.slack]
 rate_limit = 50
@@ -236,8 +252,10 @@ page_size = 100
 [sources.github]
 rate_limit = 60
 page_size = 100
+# OAuth authentication (optional - Personal Access Token is simpler)
 # client_id = "your-github-client-id"
 # client_secret = "your-github-client-secret"
+# Note: For Personal Access Token auth, credentials are stored securely via keyring
 # default_owner = "your-org"  # Default org/owner for PR lookups
 # default_repo = "your-repo"  # Default repo for PR lookups
 

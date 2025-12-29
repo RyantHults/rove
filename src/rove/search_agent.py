@@ -1,4 +1,4 @@
-"""AI-assisted search agent for Glean.
+"""AI-assisted search agent for Rove.
 
 The SearchAgent orchestrates multi-phase search across all configured sources,
 using AI for keyword extraction, relevance filtering, and reference expansion.
@@ -9,7 +9,7 @@ from datetime import datetime
 
 from openai import AsyncOpenAI
 
-from .config import GleanConfig
+from .config import RoveConfig
 from .logging import PerformanceTimer, get_logger
 from .plugins import get_plugin, list_plugins
 from .plugins.base import AuthenticationError, ContextClient, ContextItem
@@ -28,11 +28,11 @@ class SearchAgent:
     5. Filter results for relevance using AI
     """
 
-    def __init__(self, config: GleanConfig):
+    def __init__(self, config: RoveConfig):
         """Initialize the search agent.
 
         Args:
-            config: The Glean configuration.
+            config: The Rove configuration.
         """
         self.config = config
         self._ai_client: AsyncOpenAI | None = None
@@ -106,7 +106,7 @@ class SearchAgent:
                 logger.error(f"Authentication failed for {primary_source}")
                 raise AuthenticationError(
                     f"Failed to authenticate with {primary_source}. "
-                    f"Run 'glean --add-source {primary_source}' to re-authenticate."
+                    f"Run 'rove --add-source {primary_source}' to re-authenticate."
                 )
 
         primary_item = await primary_client.get_item_details(ticket_id)

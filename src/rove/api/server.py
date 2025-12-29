@@ -1,4 +1,4 @@
-"""Unix socket API server for Glean.
+"""Unix socket API server for Rove.
 
 Provides REST API endpoints for agent integration.
 """
@@ -11,18 +11,18 @@ import sys
 from aiohttp import web
 
 from .. import __version__
-from ..config import API_SOCKET, PID_FILE, ensure_glean_home
+from ..config import API_SOCKET, PID_FILE, ensure_rove_home
 from ..database import Database
 from ..logging import get_logger
-from ..scheduler import GleanScheduler
+from ..scheduler import RoveScheduler
 
 logger = get_logger("server")
 
 
-class GleanAPIServer:
+class RoveAPIServer:
     """Unix socket API server for agent integration."""
 
-    def __init__(self, scheduler: "GleanScheduler | None" = None):
+    def __init__(self, scheduler: "RoveScheduler | None" = None):
         """Initialize the API server.
 
         Args:
@@ -154,21 +154,21 @@ async def run_server(with_scheduler: bool = True) -> None:
     Args:
         with_scheduler: If True, also start the background refresh scheduler.
     """
-    ensure_glean_home()
+    ensure_rove_home()
 
     # Remove stale socket
     if API_SOCKET.exists():
         API_SOCKET.unlink()
 
     # Create and start scheduler if requested
-    scheduler: GleanScheduler | None = None
+    scheduler: RoveScheduler | None = None
     if with_scheduler:
-        scheduler = GleanScheduler()
+        scheduler = RoveScheduler()
         await scheduler.start()
         logger.info("Background scheduler started")
 
     # Create server (pass scheduler for health reporting)
-    server = GleanAPIServer(scheduler=scheduler)
+    server = RoveAPIServer(scheduler=scheduler)
     await server.start()
 
     # Track shutdown state
@@ -195,7 +195,7 @@ async def run_server(with_scheduler: bool = True) -> None:
     # Set socket permissions (owner only)
     API_SOCKET.chmod(0o600)
 
-    print(f"Glean server running on {API_SOCKET}")
+    print(f"Rove server running on {API_SOCKET}")
     if with_scheduler:
         print("Background scheduler active")
     print("Press Ctrl+C to stop...")

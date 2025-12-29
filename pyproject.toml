@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "glean"
+name = "rove"
 version = "0.1.0"
 description = "A CLI service that extracts context from multiple sources for coding agents"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
-    {name = "Glean Contributors"}
+    {name = "Rove Contributors"}
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -44,7 +44,7 @@ dev = [
 ]
 
 [project.scripts]
-glean = "glean.cli:main"
+rove = "rove.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

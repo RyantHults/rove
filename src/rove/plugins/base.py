@@ -47,7 +47,7 @@ class SearchableField:
 class ContextClient(Protocol):
     """Interface all plugins must implement.
 
-    This protocol defines the contract between Glean and its plugins.
+    This protocol defines the contract between Rove and its plugins.
     Each plugin provides access to a specific data source.
     """
 
@@ -171,7 +171,7 @@ def store_credentials(source: str, tokens: dict) -> None:
     import keyring
 
     # Store as JSON to handle multiple tokens
-    keyring.set_password(f"glean-{source}", "tokens", json.dumps(tokens))
+    keyring.set_password(f"rove-{source}", "tokens", json.dumps(tokens))
 
 
 def get_credentials(source: str) -> dict | None:
@@ -188,7 +188,7 @@ def get_credentials(source: str) -> dict | None:
     import keyring
 
     try:
-        tokens_json = keyring.get_password(f"glean-{source}", "tokens")
+        tokens_json = keyring.get_password(f"rove-{source}", "tokens")
         if tokens_json:
             return json.loads(tokens_json)
     except Exception:
@@ -205,7 +205,7 @@ def delete_credentials(source: str) -> None:
     import keyring
 
     try:
-        keyring.delete_password(f"glean-{source}", "tokens")
+        keyring.delete_password(f"rove-{source}", "tokens")
     except keyring.errors.PasswordDeleteError:
         pass  # Already deleted or never existed
 

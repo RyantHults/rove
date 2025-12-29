@@ -1,4 +1,4 @@
-"""JIRA plugin for Glean.
+"""JIRA plugin for Rove.
 
 Provides access to JIRA/Atlassian Cloud tickets, comments, and related data.
 """

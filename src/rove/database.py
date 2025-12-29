@@ -1,4 +1,4 @@
-"""SQLite database operations for Glean.
+"""SQLite database operations for Rove.
 
 Stores metadata for context files and fetch history for deduplication.
 """
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import aiosqlite
 
-from .config import DATABASE_FILE, ensure_glean_home
+from .config import DATABASE_FILE, ensure_rove_home
 
 
 def utc_now() -> datetime:
@@ -110,7 +110,7 @@ class TaskRecord:
 
 
 class Database:
-    """Async database operations for Glean."""
+    """Async database operations for Rove."""
 
     def __init__(self, db_path: Path | None = None):
         self.db_path = db_path or DATABASE_FILE
@@ -118,7 +118,7 @@ class Database:
 
     async def connect(self) -> None:
         """Connect to the database and initialize schema."""
-        ensure_glean_home()
+        ensure_rove_home()
         self._connection = await aiosqlite.connect(self.db_path)
         self._connection.row_factory = aiosqlite.Row
         await self._connection.executescript(SCHEMA)

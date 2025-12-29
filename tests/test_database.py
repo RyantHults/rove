@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from glean.database import Database
+from rove.database import Database
 
 
 @pytest.fixture

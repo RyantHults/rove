@@ -1,4 +1,4 @@
-"""Context document builder for Glean.
+"""Context document builder for Rove.
 
 Aggregates ContextItems into well-structured markdown documents.
 """
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from .config import GleanConfig, load_config
+from .config import RoveConfig, load_config
 from .database import Database
 from .logging import PerformanceTimer, get_logger
 from .plugins.base import ContextItem
@@ -48,7 +48,7 @@ def find_project_root() -> Path:
 class ContextBuilder:
     """Builds context markdown documents from gathered items."""
 
-    def __init__(self, db: Database, config: GleanConfig | None = None):
+    def __init__(self, db: Database, config: RoveConfig | None = None):
         """Initialize the context builder.
 
         Args:

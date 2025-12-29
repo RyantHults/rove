@@ -6,14 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from glean.config import GleanConfig
-from glean.context_builder import ContextBuilder
-from glean.database import Database
-from glean.plugins.base import ContextItem
+from rove.config import RoveConfig
+from rove.context_builder import ContextBuilder
+from rove.database import Database
+from rove.plugins.base import ContextItem
 
 
 @pytest.fixture
-async def context_builder(test_db: Database, mock_config: GleanConfig) -> ContextBuilder:
+async def context_builder(test_db: Database, mock_config: RoveConfig) -> ContextBuilder:
     """Create a ContextBuilder for testing."""
     return ContextBuilder(test_db, mock_config)
 

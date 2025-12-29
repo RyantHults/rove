@@ -1,7 +1,7 @@
-"""Command-line interface for Glean.
+"""Command-line interface for Rove.
 
 Provides all CLI commands for managing sources, building context,
-and interacting with the Glean service.
+and interacting with the Rove service.
 """
 
 import asyncio
@@ -27,9 +27,9 @@ from .logging import configure_logging, get_logger
 def _show_welcome_message() -> None:
     """Show welcome message for first-time users."""
     click.echo()
-    click.secho("Welcome to Glean!", fg="green", bold=True)
+    click.secho("Welcome to Rove!", fg="green", bold=True)
     click.echo()
-    click.echo("Glean helps coding agents understand your tickets by gathering")
+    click.echo("Rove helps coding agents understand your tickets by gathering")
     click.echo("context from JIRA, Slack, GitHub, and more.")
     click.echo()
     click.echo("Get started:")
@@ -37,14 +37,14 @@ def _show_welcome_message() -> None:
     click.echo("     - Add your AI API key (OpenAI, Ollama, or OpenRouter)")
     click.echo()
     click.echo("  2. Connect your sources:")
-    click.echo("     glean --add-source jira")
-    click.echo("     glean --add-source slack")
-    click.echo("     glean --add-source github")
+    click.echo("     rove --add-source jira")
+    click.echo("     rove --add-source slack")
+    click.echo("     rove --add-source github")
     click.echo()
     click.echo("  3. Build context for a ticket:")
-    click.echo("     glean --ticket TB-123")
+    click.echo("     rove --ticket TB-123")
     click.echo()
-    click.echo("For more information: glean --help")
+    click.echo("For more information: rove --help")
     click.echo()
 
 
@@ -122,21 +122,21 @@ def main(
     api_search: str | None,
     version: bool,
 ) -> None:
-    """Glean - Context extraction for coding agents.
+    """Rove - Context extraction for coding agents.
 
     Build comprehensive context documents from JIRA, Slack, GitHub and more.
 
     Examples:
 
-        glean --ticket TB-123              Build context for ticket TB-123
+        rove --ticket TB-123              Build context for ticket TB-123
 
-        glean --add-source jira            Add JIRA as a context source
+        rove --add-source jira            Add JIRA as a context source
 
-        glean --find TB-123                Find the context file for TB-123
+        rove --find TB-123                Find the context file for TB-123
 
-        glean --search "oauth auth"        Search context files
+        rove --search "oauth auth"        Search context files
 
-        glean --status                     Show task status
+        rove --status                     Show task status
     """
     # Initialize logging
     configure_logging()
@@ -147,7 +147,7 @@ def main(
         _show_welcome_message()
 
     if version:
-        click.echo(f"Glean version {__version__}")
+        click.echo(f"Rove version {__version__}")
         return
 
     if source_plugins:
@@ -240,12 +240,27 @@ async def cmd_add_source(name: str) -> None:
     factory = get_plugin(name)
     if not factory:
         click.echo(f"Unknown source plugin: {name}")
-        click.echo("Run 'glean --source-plugins' to see available plugins.")
+        click.echo("Run 'rove --source-plugins' to see available plugins.")
         sys.exit(1)
 
     click.echo(f"\nAdding {name.upper()} as a context source...")
 
-    client = factory({})
+    # Load config from settings.toml
+    config = load_config()
+    source_config: dict = {}
+    if hasattr(config.sources, name):
+        src_cfg = getattr(config.sources, name)
+        source_config = {
+            "rate_limit": src_cfg.rate_limit,
+            "page_size": src_cfg.page_size,
+        }
+        # Include OAuth credentials if configured
+        if src_cfg.client_id:
+            source_config["client_id"] = src_cfg.client_id
+        if src_cfg.client_secret:
+            source_config["client_secret"] = src_cfg.client_secret
+
+    client = factory(source_config)
 
     # Perform authentication
     try:

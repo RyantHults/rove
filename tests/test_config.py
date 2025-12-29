@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from glean.config import (
-    GleanConfig,
+from rove.config import (
+    RoveConfig,
     parse_duration,
     load_config,
     save_config,
@@ -41,7 +41,7 @@ def test_parse_duration_invalid():
 
 def test_default_config():
     """Test default configuration values."""
-    config = GleanConfig()
+    config = RoveConfig()
     assert config.sources.default_ticket_source == "jira"
     assert config.scheduler.refresh_interval == "6h"
     assert config.ai.max_hops == 3
@@ -52,11 +52,11 @@ def test_config_round_trip(tmp_path, monkeypatch):
     # Use temp directory for settings
     settings_file = tmp_path / "settings.toml"
     
-    monkeypatch.setattr("glean.config.SETTINGS_FILE", settings_file)
-    monkeypatch.setattr("glean.config.GLEAN_HOME", tmp_path)
+    monkeypatch.setattr("rove.config.SETTINGS_FILE", settings_file)
+    monkeypatch.setattr("rove.config.ROVE_HOME", tmp_path)
     
     # Create and save config
-    config = GleanConfig()
+    config = RoveConfig()
     config.sources.default_ticket_source = "github"
     config.ai.model = "gpt-4"
     

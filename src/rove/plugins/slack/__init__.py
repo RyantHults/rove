@@ -1,4 +1,4 @@
-"""Slack plugin for Glean.
+"""Slack plugin for Rove.
 
 Provides access to Slack messages and threads for context gathering.
 """

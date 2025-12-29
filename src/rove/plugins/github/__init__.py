@@ -1,4 +1,4 @@
-"""GitHub plugin for Glean.
+"""GitHub plugin for Rove.
 
 Provides access to GitHub PRs, issues, and commits.
 """

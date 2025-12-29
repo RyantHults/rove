@@ -1,4 +1,4 @@
-"""Plugin discovery and registration for Glean.
+"""Plugin discovery and registration for Rove.
 
 Plugins are auto-discovered by scanning the plugins directory. Each plugin
 must export:
@@ -34,7 +34,7 @@ def discover_plugins() -> dict[str, Callable[..., ContextClient]]:
     for item in plugin_dir.iterdir():
         if item.is_dir() and not item.name.startswith("_"):
             try:
-                module = importlib.import_module(f".{item.name}", package="glean.plugins")
+                module = importlib.import_module(f".{item.name}", package="rove.plugins")
                 if hasattr(module, "create_client") and hasattr(module, "PLUGIN_NAME"):
                     _plugins[module.PLUGIN_NAME] = module.create_client
             except ImportError:
@@ -79,7 +79,7 @@ def get_plugin_info(name: str) -> dict[str, str] | None:
         return None
 
     try:
-        module = importlib.import_module(f".{name.lower()}", package="glean.plugins")
+        module = importlib.import_module(f".{name.lower()}", package="rove.plugins")
         return {
             "name": getattr(module, "PLUGIN_NAME", name),
             "version": getattr(module, "PLUGIN_VERSION", "unknown"),

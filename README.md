@@ -1,4 +1,4 @@
-# Glean
+# Rove
 
 ## Vision and Strategy
 
@@ -42,7 +42,7 @@ As a developer, I want my coding agents to have as full of an understanding of o
 
 app must require the user to log into their 3rd part accounts as infrequently as possible. Ideally, once the user logs in they never have to re-authenticate again 
 
-settings are stored in `~/.glean/settings.toml`
+settings are stored in `.rove/settings.toml` (in the current working directory)
 
 ### Out of Scope
 
@@ -55,29 +55,29 @@ settings are stored in `~/.glean/settings.toml`
 
 MVP will be all commandline. should work somewhat like:
 ```
-# kick off glean task for ticket (uses default ticket source)
-glean --ticket TB-123
+# kick off rove task for ticket (uses default ticket source)
+rove --ticket TB-123
 
 # specify a different ticket source (overrides default)
-glean --ticket LIN-456 --source linear
+rove --ticket LIN-456 --source linear
 
 # see status of all context building tasks
-glean --status
+rove --status
 
 # list all compatible sources that can be connected
-glean --source-plugins
+rove --source-plugins
 
 # add a new source (JIRA in this case)
-glean --add-source JIRA 
+rove --add-source JIRA 
 
 # set default ticket source
-glean --set-default-source jira
+rove --set-default-source jira
 
 # find context file for a ticket (for agent use)
-glean --find TB-123
+rove --find TB-123
 
 # search context files by keyword
-glean --search "oauth authentication"
+rove --search "oauth authentication"
 ```
 
 ### Information Architecture
@@ -177,11 +177,11 @@ Agents can find context files via CLI:
 
 ```bash
 # Find context file for a ticket
-glean --find TB-123
+rove --find TB-123
 # outputs: /home/user/projects/backend-api/.context/TB-123_oauth_authentication_flow.md
 
 # Or search by keyword
-glean --search "oauth authentication"
+rove --search "oauth authentication"
 # outputs matching context files
 ```
 
@@ -232,7 +232,7 @@ Other connected sources (Slack, GitHub, etc.) are searched for references to the
 
 The `--source` CLI flag overrides the default when needed:
 ```bash
-glean --ticket LIN-456 --source linear
+rove --ticket LIN-456 --source linear
 ```
 
 #### Multi-Hop Search (Max 3 Hops)
@@ -266,26 +266,26 @@ Time windows can be specified via CLI flags:
 
 ```bash
 # Default: no time restriction
-glean --ticket TB-123
+rove --ticket TB-123
 
 # With absolute dates
-glean --ticket TB-123 --since 2024-12-01 --until 2024-12-28
+rove --ticket TB-123 --since 2024-12-01 --until 2024-12-28
 
 # With relative time
-glean --ticket TB-123 --since "30 days ago"
+rove --ticket TB-123 --since "30 days ago"
 ```
 
 #### Configuration (settings.toml)
 
-Settings are stored in `~/.glean/settings.toml`.
+Settings are stored in `.rove/settings.toml` (in the current working directory).
 
 **Precedence** (highest to lowest):
 1. CLI flags (`--since "7 days ago"`)
-2. Config file (`~/.glean/settings.toml`)
+2. Config file (`.rove/settings.toml`)
 3. Built-in defaults
 
 ```toml
-# ~/.glean/settings.toml
+# .rove/settings.toml
 
 [sources]
 # Primary ticket source - where to fetch full ticket details from
@@ -365,7 +365,7 @@ The `keyring` library automatically selects the appropriate secure storage:
 | macOS | Keychain Services |
 | Windows | Credential Manager (DPAPI) |
 | Linux | Secret Service API (GNOME Keyring, KWallet) |
-| Fallback | Encrypted file (`~/.glean/credentials.enc`) |
+| Fallback | Encrypted file (`.rove/credentials.enc`) |
 
 This follows industry standards used by `gh` (GitHub CLI), `gcloud`, AWS CLI, etc.
 
@@ -375,15 +375,15 @@ This follows industry standards used by `gh` (GitHub CLI), `gcloud`, AWS CLI, et
 import keyring
 
 # Store tokens (called by plugin's authenticate())
-keyring.set_password("glean-jira", "access_token", "eyJ...")
-keyring.set_password("glean-jira", "refresh_token", "xoxr-...")
+keyring.set_password("rove-jira", "access_token", "eyJ...")
+keyring.set_password("rove-jira", "refresh_token", "xoxr-...")
 
 # Retrieve tokens (called by plugin's search())
-access_token = keyring.get_password("glean-jira", "access_token")
+access_token = keyring.get_password("rove-jira", "access_token")
 
 # Delete tokens (called by plugin's disconnect())
-keyring.delete_password("glean-jira", "access_token")
-keyring.delete_password("glean-jira", "refresh_token")
+keyring.delete_password("rove-jira", "access_token")
+keyring.delete_password("rove-jira", "refresh_token")
 ```
 
 #### Token Refresh
@@ -400,7 +400,7 @@ The API allows agents to discover and search context files.
 
 #### Server Architecture
 
-- **Transport**: Unix socket at `~/.glean/api.sock`
+- **Transport**: Unix socket at `.rove/api.sock` (in the current working directory)
 - **Security**: Socket permissions (0600) restrict access to the owning user
 - **Lifecycle**: Always-on daemon, started/stopped via CLI
 - **Platform**: Linux and macOS (MVP)
@@ -409,13 +409,13 @@ The API allows agents to discover and search context files.
 
 ```bash
 # Start the API server (runs as daemon)
-glean --start-server
+rove --start-server
 
 # Stop the API server
-glean --stop-server
+rove --stop-server
 
 # Check if server is running
-glean --server-status
+rove --server-status
 ```
 
 #### Endpoints
@@ -424,7 +424,7 @@ glean --server-status
 Find the context file for a specific ticket.
 
 ```bash
-curl --unix-socket ~/.glean/api.sock http://localhost/find/TB-123
+curl --unix-socket .rove/api.sock http://localhost/find/TB-123
 ```
 
 Response:
@@ -441,7 +441,7 @@ Response:
 Search context files by keyword.
 
 ```bash
-curl --unix-socket ~/.glean/api.sock "http://localhost/search?q=oauth+authentication"
+curl --unix-socket .rove/api.sock "http://localhost/search?q=oauth+authentication"
 ```
 
 Response:
@@ -469,7 +469,7 @@ Response:
 Health check endpoint.
 
 ```bash
-curl --unix-socket ~/.glean/api.sock http://localhost/health
+curl --unix-socket .rove/api.sock http://localhost/health
 ```
 
 Response:
@@ -488,21 +488,21 @@ Agents integrate via CLI commands. This approach is simple, universal, and works
 
 ```bash
 # Find context file for a ticket
-glean --api-find TB-123
+rove --api-find TB-123
 # Output: TB-123_oauth_authentication.md
 
 # Search by keywords
-glean --api-search "oauth authentication"
+rove --api-search "oauth authentication"
 # Output: TB-123_oauth_authentication.md, TB-456_sso_integration.md
 
 # Check if context exists for a ticket
-glean --api-find TB-123 && echo "found" || echo "not found"
+rove --api-find TB-123 && echo "found" || echo "not found"
 ```
 
 **Typical agent workflow:**
 
 1. Agent receives a task mentioning ticket TB-123
-2. Agent runs: `glean --api-find TB-123`
+2. Agent runs: `rove --api-find TB-123`
 3. Agent gets filename: `TB-123_oauth_authentication.md`
 4. Agent locates and reads the file:
    ```bash
@@ -664,7 +664,7 @@ def discover_plugins() -> dict[str, callable]:
     for item in plugin_dir.iterdir():
         if item.is_dir() and not item.name.startswith('_'):
             try:
-                module = importlib.import_module(f".{item.name}", package="plugins")
+                module = importlib.import_module(f".{item.name}", package="rove.plugins")
                 if hasattr(module, 'create_client') and hasattr(module, 'PLUGIN_NAME'):
                     plugins[module.PLUGIN_NAME] = module.create_client
             except ImportError:

@@ -6,15 +6,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from glean.config import GleanConfig
-from glean.database import Database
-from glean.plugins.base import ContextItem, SearchableField
+from rove.config import RoveConfig
+from rove.database import Database
+from rove.plugins.base import ContextItem, SearchableField
 
 
 @pytest.fixture
-def mock_config() -> GleanConfig:
+def mock_config() -> RoveConfig:
     """Create a mock configuration."""
-    config = GleanConfig()
+    config = RoveConfig()
     config.ai.api_key = "test-key"
     config.ai.model = "gpt-4o-mini"
     return config
