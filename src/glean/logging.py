@@ -7,7 +7,7 @@ Provides structured logging with separate handlers for:
 
 import logging
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -174,7 +174,7 @@ class PerformanceTimer:
 
     def __enter__(self) -> "PerformanceTimer":
         """Start the timer."""
-        self._start_time = datetime.utcnow()
+        self._start_time = datetime.now(UTC)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -182,7 +182,7 @@ class PerformanceTimer:
         if self._start_time is None:
             return
 
-        duration = (datetime.utcnow() - self._start_time).total_seconds() * 1000
+        duration = (datetime.now(UTC) - self._start_time).total_seconds() * 1000
 
         if exc_type is not None:
             self.metrics["error"] = exc_type.__name__

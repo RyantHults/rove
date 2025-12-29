@@ -10,7 +10,7 @@ import secrets
 import urllib.parse
 import webbrowser
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -289,7 +289,7 @@ async def perform_oauth_flow(client_id: str | None = None) -> OAuthTokens | None
 
     # Calculate token expiry
     expires_in = token_response.get("expires_in", 3600)
-    expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+    expires_at = datetime.now(UTC) + timedelta(seconds=expires_in)
 
     return OAuthTokens(
         access_token=access_token,

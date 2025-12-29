@@ -5,7 +5,7 @@ Aggregates ContextItems into well-structured markdown documents.
 
 import re
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -432,7 +432,7 @@ Groups (JSON only):"""
         for item in items:
             source_counts[item.source] = source_counts.get(item.source, 0) + 1
 
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
         for source, count in sorted(source_counts.items()):
             lines.append(f"| {source.upper()} | {count} | {today} |")
 

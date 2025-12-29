@@ -3,7 +3,7 @@
 Provides full access to JIRA tickets, comments, and related data.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -83,7 +83,7 @@ class JiraContextClient(ContextClient):
 
         # Check if token needs refresh
         buffer = timedelta(seconds=self.config["token_refresh_buffer"])
-        if datetime.utcnow() + buffer < self._tokens.expires_at:
+        if datetime.now(UTC) + buffer < self._tokens.expires_at:
             return True  # Token is still valid
 
         # Try to refresh
@@ -100,7 +100,7 @@ class JiraContextClient(ContextClient):
                 refresh_token=token_response.get(
                     "refresh_token", self._tokens.refresh_token
                 ),
-                expires_at=datetime.utcnow() + timedelta(seconds=expires_in),
+                expires_at=datetime.now(UTC) + timedelta(seconds=expires_in),
                 cloud_id=self._tokens.cloud_id,
                 site_url=self._tokens.site_url,
             )

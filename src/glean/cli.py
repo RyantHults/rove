@@ -6,7 +6,7 @@ and interacting with the Glean service.
 
 import asyncio
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -70,13 +70,13 @@ def parse_date(date_str: str) -> datetime:
             from datetime import timedelta
 
             if unit == "day":
-                return datetime.utcnow() - timedelta(days=value)
+                return datetime.now(UTC) - timedelta(days=value)
             elif unit == "week":
-                return datetime.utcnow() - timedelta(weeks=value)
+                return datetime.now(UTC) - timedelta(weeks=value)
             elif unit == "month":
-                return datetime.utcnow() - timedelta(days=value * 30)
+                return datetime.now(UTC) - timedelta(days=value * 30)
             elif unit == "hour":
-                return datetime.utcnow() - timedelta(hours=value)
+                return datetime.now(UTC) - timedelta(hours=value)
         except ValueError:
             pass
 
