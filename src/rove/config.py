@@ -30,6 +30,7 @@ class SourceConfig:
     client_secret: str = ""  # OAuth client secret (required for OAuth sources)
     default_owner: str = ""  # GitHub: default org/owner for PR/issue lookups
     default_repo: str = ""  # GitHub: default repo for PR/issue lookups
+    excluded_users: list[str] = field(default_factory=list)  # Slack: users to exclude from search
 
 
 @dataclass
@@ -129,6 +130,8 @@ def load_config() -> RoveConfig:
                     source_config.default_owner = source_data["default_owner"]
                 if "default_repo" in source_data:
                     source_config.default_repo = source_data["default_repo"]
+                if "excluded_users" in source_data:
+                    source_config.excluded_users = source_data["excluded_users"]
 
     # Merge scheduler section
     if "scheduler" in data:

@@ -37,12 +37,12 @@ def _show_welcome_message() -> None:
     click.echo("     - Add your AI API key (OpenAI, Ollama, or OpenRouter)")
     click.echo()
     click.echo("  2. Connect your sources:")
-    click.echo("     rove --add-source jira")
-    click.echo("     rove --add-source slack")
-    click.echo("     rove --add-source github")
+    click.echo("     rove source add jira")
+    click.echo("     rove source add slack")
+    click.echo("     rove source add github")
     click.echo()
     click.echo("  3. Build context for a ticket:")
-    click.echo("     rove --ticket TB-123")
+    click.echo("     rove gather TB-123")
     click.echo()
     click.echo("For more information: rove --help")
     click.echo()
@@ -83,60 +83,25 @@ def parse_date(date_str: str) -> datetime:
     raise click.BadParameter(f"Invalid date format: {date_str}")
 
 
-@click.command()
-@click.option("--ticket", "-t", help="Build context for a specific ticket (e.g., TB-123)")
-@click.option("--source", "-s", help="Override default ticket source for this operation")
-@click.option("--status", is_flag=True, help="Show status of all context building tasks")
-@click.option("--source-plugins", is_flag=True, help="List all available source plugins")
-@click.option("--add-source", metavar="NAME", help="Add and authenticate a new source")
-@click.option("--remove-source", metavar="NAME", help="Remove a source connection")
-@click.option("--list-sources", is_flag=True, help="List configured sources")
-@click.option("--set-default-source", metavar="NAME", help="Set the default ticket source")
-@click.option("--find", metavar="TICKET_ID", help="Find context file for a ticket")
-@click.option("--search", "-q", metavar="QUERY", help="Search context files by keyword")
-@click.option("--since", metavar="DATE", help="Only include items after this date")
-@click.option("--until", metavar="DATE", help="Only include items before this date")
-@click.option("--start-server", is_flag=True, help="Start the API server daemon")
-@click.option("--stop-server", is_flag=True, help="Stop the API server daemon")
-@click.option("--server-status", is_flag=True, help="Check if API server is running")
-@click.option("--api-find", metavar="TICKET_ID", help="Find context file via API (for agents)")
-@click.option("--api-search", metavar="QUERY", help="Search context files via API (for agents)")
+@click.group(invoke_without_command=True)
 @click.option("--version", is_flag=True, help="Show version information")
-def main(
-    ticket: str | None,
-    source: str | None,
-    status: bool,
-    source_plugins: bool,
-    add_source: str | None,
-    remove_source: str | None,
-    list_sources: bool,
-    set_default_source: str | None,
-    find: str | None,
-    search: str | None,
-    since: str | None,
-    until: str | None,
-    start_server: bool,
-    stop_server: bool,
-    server_status: bool,
-    api_find: str | None,
-    api_search: str | None,
-    version: bool,
-) -> None:
+@click.pass_context
+def main(ctx: click.Context, version: bool) -> None:
     """Rove - Context extraction for coding agents.
 
     Build comprehensive context documents from JIRA, Slack, GitHub and more.
 
     Examples:
 
-        rove --ticket TB-123              Build context for ticket TB-123
+        rove gather TB-123                Build context for ticket TB-123
 
-        rove --add-source jira            Add JIRA as a context source
+        rove source add jira              Add JIRA as a context source
 
-        rove --find TB-123                Find the context file for TB-123
+        rove find TB-123                  Find the context file for TB-123
 
-        rove --search "oauth auth"        Search context files
+        rove search "oauth auth"          Search context files
 
-        rove --status                     Show task status
+        rove status                       Show task status
     """
     # Initialize logging
     configure_logging()
@@ -150,67 +115,159 @@ def main(
         click.echo(f"Rove version {__version__}")
         return
 
-    if source_plugins:
-        asyncio.run(cmd_list_plugins())
-        return
+    # No subcommand specified, show help
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
-    if add_source:
-        asyncio.run(cmd_add_source(add_source))
-        return
 
-    if remove_source:
-        asyncio.run(cmd_remove_source(remove_source))
-        return
+@main.command("gather")
+@click.argument("ticket_id")
+@click.option("--source", "-s", help="Override default ticket source for this operation")
+@click.option("--since", metavar="DATE", help="Only include items after this date")
+@click.option("--until", metavar="DATE", help="Only include items before this date")
+def gather(
+    ticket_id: str,
+    source: str | None,
+    since: str | None,
+    until: str | None,
+) -> None:
+    """Gather context for a ticket.
 
-    if list_sources:
-        asyncio.run(cmd_list_sources())
-        return
+    Examples:
 
-    if set_default_source:
-        cmd_set_default_source(set_default_source)
-        return
+        rove gather TB-123
 
-    if status:
-        asyncio.run(cmd_status())
-        return
+        rove gather TB-123 --source jira
 
-    if find:
-        asyncio.run(cmd_find(find))
-        return
+        rove gather TB-123 --since "7 days ago"
+    """
+    since_dt = parse_date(since) if since else None
+    until_dt = parse_date(until) if until else None
+    asyncio.run(cmd_build_context(ticket_id, source, since_dt, until_dt))
 
-    if search:
-        asyncio.run(cmd_search(search))
-        return
 
-    if ticket:
-        since_dt = parse_date(since) if since else None
-        until_dt = parse_date(until) if until else None
-        asyncio.run(cmd_build_context(ticket, source, since_dt, until_dt))
-        return
+# Alias 'g' for 'gather'
+@main.command("g", hidden=True)
+@click.argument("ticket_id")
+@click.option("--source", "-s", help="Override default ticket source for this operation")
+@click.option("--since", metavar="DATE", help="Only include items after this date")
+@click.option("--until", metavar="DATE", help="Only include items before this date")
+def gather_alias(
+    ticket_id: str,
+    source: str | None,
+    since: str | None,
+    until: str | None,
+) -> None:
+    """Alias for 'gather'."""
+    since_dt = parse_date(since) if since else None
+    until_dt = parse_date(until) if until else None
+    asyncio.run(cmd_build_context(ticket_id, source, since_dt, until_dt))
 
-    if start_server:
-        asyncio.run(cmd_start_server())
-        return
 
-    if stop_server:
-        cmd_stop_server()
-        return
+@main.command("status")
+def status() -> None:
+    """Show status of all context building tasks."""
+    asyncio.run(cmd_status())
 
-    if server_status:
-        cmd_server_status()
-        return
 
-    if api_find:
-        asyncio.run(cmd_api_find(api_find))
-        return
+@main.command("find")
+@click.argument("ticket_id")
+def find(ticket_id: str) -> None:
+    """Find context file for a ticket."""
+    asyncio.run(cmd_find(ticket_id))
 
-    if api_search:
-        asyncio.run(cmd_api_search(api_search))
-        return
 
-    # No command specified, show help
-    ctx = click.get_current_context()
-    click.echo(ctx.get_help())
+@main.command("search")
+@click.argument("query")
+def search(query: str) -> None:
+    """Search context files by keyword."""
+    asyncio.run(cmd_search(query))
+
+
+# Source management commands
+@main.group("source")
+def source_group() -> None:
+    """Manage context sources (jira, slack, github, etc.)."""
+    pass
+
+
+@source_group.command("list")
+def source_list() -> None:
+    """List configured sources and their status."""
+    asyncio.run(cmd_list_sources())
+
+
+@source_group.command("add")
+@click.argument("name")
+def source_add(name: str) -> None:
+    """Add and authenticate a new source."""
+    asyncio.run(cmd_add_source(name))
+
+
+@source_group.command("remove")
+@click.argument("name")
+def source_remove(name: str) -> None:
+    """Remove a source connection."""
+    asyncio.run(cmd_remove_source(name))
+
+
+@source_group.command("plugins")
+def source_plugins() -> None:
+    """List all available source plugins."""
+    asyncio.run(cmd_list_plugins())
+
+
+@source_group.command("default")
+@click.argument("name")
+def source_default(name: str) -> None:
+    """Set the default ticket source."""
+    cmd_set_default_source(name)
+
+
+# Server commands
+@main.group("server")
+def server_group() -> None:
+    """Manage the API server daemon."""
+    pass
+
+
+@server_group.command("start")
+def server_start() -> None:
+    """Start the API server daemon."""
+    asyncio.run(cmd_start_server())
+
+
+@server_group.command("stop")
+def server_stop() -> None:
+    """Stop the API server daemon."""
+    cmd_stop_server()
+
+
+@server_group.command("status")
+def server_status_cmd() -> None:
+    """Check if API server is running."""
+    cmd_server_status()
+
+
+# API commands (for agent use)
+@main.group("api", hidden=True)
+def api_group() -> None:
+    """API commands for agent use."""
+    pass
+
+
+@api_group.command("find")
+@click.argument("ticket_id")
+def api_find(ticket_id: str) -> None:
+    """Find context file via API (for agents)."""
+    asyncio.run(cmd_api_find(ticket_id))
+
+
+@api_group.command("search")
+@click.argument("query")
+def api_search(query: str) -> None:
+    """Search context files via API (for agents)."""
+    asyncio.run(cmd_api_search(query))
 
 
 async def cmd_list_plugins() -> None:

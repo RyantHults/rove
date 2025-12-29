@@ -6,10 +6,12 @@ Provides access to Slack messages, channels, and threads.
 import asyncio
 import secrets
 import webbrowser
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import httpx
 
+from ...logging import get_logger
 from ..base import (
     ContextClient,
     ContextItem,
@@ -18,6 +20,8 @@ from ..base import (
     get_credentials,
     store_credentials,
 )
+
+logger = get_logger("slack")
 
 # Slack OAuth endpoints
 SLACK_AUTH_URL = "https://slack.com/oauth/v2/authorize"
@@ -38,6 +42,15 @@ SCOPES = [
 ]
 
 
+@dataclass
+class DirectTokenCredentials:
+    """Container for direct User OAuth Token credentials."""
+
+    user_token: str
+    team_id: str | None = None
+    team_name: str | None = None
+
+
 class SlackContextClient(ContextClient):
     """Slack implementation of the ContextClient protocol."""
 
@@ -53,6 +66,7 @@ class SlackContextClient(ContextClient):
         self._access_token: str | None = None
         self._team_id: str | None = None
         self._team_name: str | None = None
+        self._auth_method: str = "oauth"  # "oauth" or "token"
         self._client_id = config.get("client_id", DEFAULT_CLIENT_ID)
         self._client_secret = config.get("client_secret", DEFAULT_CLIENT_SECRET)
         self._load_stored_credentials()
@@ -61,21 +75,24 @@ class SlackContextClient(ContextClient):
         """Load credentials from keyring if available."""
         creds = get_credentials("slack")
         if creds:
-            self._access_token = creds.get("access_token")
+            self._access_token = creds.get("access_token") or creds.get("user_token")
             self._team_id = creds.get("team_id")
             self._team_name = creds.get("team_name")
+            self._auth_method = creds.get("auth_method", "oauth")
 
     def _save_credentials(self) -> None:
         """Save current tokens to keyring."""
         if self._access_token:
-            store_credentials(
-                "slack",
-                {
-                    "access_token": self._access_token,
-                    "team_id": self._team_id,
-                    "team_name": self._team_name,
-                },
-            )
+            creds = {
+                "team_id": self._team_id,
+                "team_name": self._team_name,
+                "auth_method": self._auth_method,
+            }
+            if self._auth_method == "token":
+                creds["user_token"] = self._access_token
+            else:
+                creds["access_token"] = self._access_token
+            store_credentials("slack", creds)
 
     def source_name(self) -> str:
         """Return human-readable name."""
@@ -124,23 +141,74 @@ class SlackContextClient(ContextClient):
         ]
 
     async def authenticate(self, credentials: dict | None = None) -> bool:
-        """Authenticate with Slack via OAuth."""
+        """Authenticate with Slack via OAuth or direct User Token.
+
+        Args:
+            credentials: Optional pre-existing credentials dict.
+                        For OAuth: {"access_token": ..., "team_id": ..., "team_name": ...}
+                        For token: {"user_token": ...}
+
+        Returns:
+            True if authentication succeeded.
+        """
         if credentials:
-            self._access_token = credentials.get("access_token")
+            # Check if it's a direct token or OAuth credentials
+            if "user_token" in credentials:
+                self._access_token = credentials["user_token"]
+                self._auth_method = "token"
+            else:
+                self._access_token = credentials.get("access_token")
+                self._auth_method = "oauth"
             self._team_id = credentials.get("team_id")
             self._team_name = credentials.get("team_name")
             self._save_credentials()
             return bool(self._access_token)
 
-        # Perform OAuth flow
-        tokens = await self._perform_oauth_flow()
-        if tokens:
-            self._access_token = tokens["access_token"]
-            self._team_id = tokens.get("team_id")
-            self._team_name = tokens.get("team_name")
+        # Interactive authentication - prompt user for method
+        import click
+
+        click.echo("\nChoose authentication method:")
+        click.echo("1. OAuth (requires Slack app with redirect URL configured)")
+        click.echo("2. User Token (simpler - just paste token from Slack app)")
+        choice = click.prompt("Enter choice", type=click.Choice(["1", "2"]), default="2")
+
+        if choice == "2":
+            # Direct token authentication
+            click.echo("\nTo get your User OAuth Token:")
+            click.echo("  1. Go to https://api.slack.com/apps")
+            click.echo("  2. Select your app (or create one)")
+            click.echo("  3. Go to 'OAuth & Permissions'")
+            click.echo("  4. Add required scopes: search:read, channels:read, channels:history")
+            click.echo("  5. Install the app to your workspace")
+            click.echo("  6. Copy the 'User OAuth Token' (starts with xoxp-)")
+            click.echo()
+
+            user_token = click.prompt("Enter your User OAuth Token", hide_input=True)
+
+            if not user_token.startswith("xoxp-"):
+                click.echo("Warning: Token doesn't start with 'xoxp-'. Make sure you copied the User OAuth Token, not the Bot Token.")
+
+            self._access_token = user_token
+            self._auth_method = "token"
             self._save_credentials()
             return True
-        return False
+        else:
+            # Check if OAuth is properly configured
+            if not self._client_id or self._client_id == DEFAULT_CLIENT_ID:
+                click.echo("\nOAuth requires client_id to be configured in settings.toml")
+                click.echo("Or use option 2 (User Token) which doesn't require OAuth setup.")
+                return False
+
+            # Perform OAuth flow
+            tokens = await self._perform_oauth_flow()
+            if tokens:
+                self._access_token = tokens["access_token"]
+                self._team_id = tokens.get("team_id")
+                self._team_name = tokens.get("team_name")
+                self._auth_method = "oauth"
+                self._save_credentials()
+                return True
+            return False
 
     async def _perform_oauth_flow(self) -> dict | None:
         """Perform Slack OAuth flow."""
@@ -242,7 +310,14 @@ class SlackContextClient(ContextClient):
                     headers={"Authorization": f"Bearer {self._access_token}"},
                 )
                 data = response.json()
-                return data.get("ok", False)
+                if data.get("ok"):
+                    # Populate team info if we didn't have it
+                    if not self._team_id:
+                        self._team_id = data.get("team_id")
+                        self._team_name = data.get("team")
+                        self._save_credentials()
+                    return True
+                return False
         except Exception:
             return False
 
@@ -259,13 +334,27 @@ class SlackContextClient(ContextClient):
             return []
 
         try:
+            # Apply user exclusions to query
+            search_query = query
+            excluded_users = self.config.get("excluded_users", [])
+            if excluded_users:
+                # Quote usernames with spaces for Slack search
+                parts = []
+                for user in excluded_users:
+                    if " " in user:
+                        parts.append(f'-from:"{user}"')
+                    else:
+                        parts.append(f"-from:{user}")
+                search_query = f"{query} {' '.join(parts)}"
+
             async with httpx.AsyncClient() as client:
                 params: dict = {
-                    "query": query,
+                    "query": search_query,
                     "count": self.config["page_size"],
                     "sort": "timestamp",
                 }
 
+                logger.debug(f"Slack search query: {search_query}")
                 response = await client.post(
                     f"{SLACK_API_BASE}/search.messages",
                     headers={"Authorization": f"Bearer {self._access_token}"},
@@ -274,10 +363,12 @@ class SlackContextClient(ContextClient):
                 data = response.json()
 
                 if not data.get("ok"):
+                    logger.debug(f"Slack search failed: {data.get('error', 'unknown error')}")
                     return []
 
                 items = []
                 messages = data.get("messages", {}).get("matches", [])
+                logger.debug(f"Slack search returned {len(messages)} messages")
 
                 for msg in messages:
                     timestamp = datetime.fromtimestamp(float(msg.get("ts", 0)))
@@ -305,8 +396,10 @@ class SlackContextClient(ContextClient):
                         )
                     )
 
+                logger.debug(f"Slack search returning {len(items)} items")
                 return items
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Slack search failed with exception: {e}")
             return []
 
     async def get_item_details(self, item_id: str) -> ContextItem | None:
@@ -363,6 +456,7 @@ class SlackContextClient(ContextClient):
         self._access_token = None
         self._team_id = None
         self._team_name = None
+        self._auth_method = "oauth"
 
     def supported_reference_types(self) -> list[str]:
         """Return list of reference types this plugin can resolve."""

@@ -594,18 +594,24 @@ class JiraContextClient(ContextClient):
                 return "".join(items)
 
             if node_type == "orderedList":
-                result = []
-                for i, c in enumerate(content, 1):
-                    item_text = extract_from_node(c, list_level + 1)
-                    # Replace leading bullet with number
-                    if item_text.startswith("  " * list_level + "- "):
-                        item_text = item_text.replace(
-                            "  " * list_level + "- ",
-                            "  " * list_level + f"{i}. ",
-                            1,
+                # Get starting number from attrs (defaults to 1)
+                start = node.get("attrs", {}).get("order", 1)
+                lines = []
+                indent = "  " * list_level
+                for i, c in enumerate(content, start):
+                    # Process listItem content directly to avoid bullet formatting
+                    if c.get("type") == "listItem":
+                        inner_content = c.get("content", [])
+                        item_inner = "".join(
+                            extract_from_node(ic, list_level + 1)
+                            for ic in inner_content
                         )
-                    result.append(item_text)
-                return "".join(result)
+                        item_inner = item_inner.rstrip()
+                        lines.append(f"{indent}{i}. {item_inner}\n")
+                    else:
+                        # Fallback for unexpected structure
+                        lines.append(extract_from_node(c, list_level + 1))
+                return "".join(lines)
 
             if node_type == "listItem":
                 indent = "  " * (list_level - 1)

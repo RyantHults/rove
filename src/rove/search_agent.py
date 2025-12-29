@@ -71,6 +71,9 @@ class SearchAgent:
                         source_config["default_owner"] = src_cfg.default_owner
                     if hasattr(src_cfg, "default_repo") and src_cfg.default_repo:
                         source_config["default_repo"] = src_cfg.default_repo
+                    # Include Slack-specific config
+                    if hasattr(src_cfg, "excluded_users") and src_cfg.excluded_users:
+                        source_config["excluded_users"] = src_cfg.excluded_users
                 self._clients[source] = factory(source_config)
         return self._clients.get(source)
 
@@ -171,15 +174,24 @@ class SearchAgent:
         logger.debug("Phase 4: Searching other sources for references")
         search_queries = [ticket_id] + keywords[:3]  # Limit to 3 keywords
 
-        for source_name in list_plugins():
+        available_plugins = list_plugins()
+        logger.debug(f"Available plugins: {available_plugins}")
+
+        for source_name in available_plugins:
             # Skip the primary source - we already have everything from Phase 1
             if source_name == primary_source:
+                logger.debug(f"Skipping {source_name} (primary source)")
                 continue
 
             client = self._get_source_client(source_name)
-            if not client or not client.is_authenticated():
+            if not client:
+                logger.debug(f"Skipping {source_name}: no client available")
+                continue
+            if not client.is_authenticated():
+                logger.debug(f"Skipping {source_name}: not authenticated")
                 continue
 
+            logger.debug(f"Searching {source_name} with queries: {search_queries}")
             for query in search_queries:
                 try:
                     items = await client.search(
@@ -187,6 +199,7 @@ class SearchAgent:
                         since=since,
                         until=until,
                     )
+                    logger.debug(f"  {source_name} search for '{query}': {len(items)} items")
                     for item in items:
                         if item.url not in seen_urls:
                             all_items.append(item)
