@@ -221,18 +221,30 @@ class TestSearch:
         since = datetime(2024, 12, 1)
         until = datetime(2024, 12, 31)
 
+        # Create a separate mock for the secondary source (slack)
+        # Primary source (jira) is used for get_item_details, not search
+        mock_slack_client = MagicMock()
+        mock_slack_client.is_authenticated.return_value = True
+        mock_slack_client.search = AsyncMock(return_value=[])
+        mock_slack_client.supported_reference_types.return_value = ["message"]
+
+        def get_client(source: str):
+            if source == "slack":
+                return mock_slack_client
+            return mock_source_client
+
         with patch(
-            "rove.search_agent.list_plugins", return_value=["jira"]
+            "rove.search_agent.list_plugins", return_value=["jira", "slack"]
         ), patch.object(
-            search_agent, "_get_source_client", return_value=mock_source_client
+            search_agent, "_get_source_client", side_effect=get_client
         ), patch.object(
             search_agent, "_get_ai_client", return_value=mock_ai_client
         ):
             await search_agent.search("TB-123", since=since, until=until)
 
-        # Verify search was called with time filters
-        mock_source_client.search.assert_called()
-        call_kwargs = mock_source_client.search.call_args.kwargs
+        # Verify search was called on the secondary source with time filters
+        mock_slack_client.search.assert_called()
+        call_kwargs = mock_slack_client.search.call_args.kwargs
         assert call_kwargs.get("since") == since
         assert call_kwargs.get("until") == until
 
@@ -255,7 +267,7 @@ class TestSearch:
                 await search_agent.search("TB-123")
 
         assert "Failed to authenticate with jira" in str(exc_info.value)
-        assert "glean --add-source jira" in str(exc_info.value)
+        assert "rove --add-source jira" in str(exc_info.value)
 
 
 

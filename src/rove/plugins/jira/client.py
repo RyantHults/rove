@@ -386,6 +386,8 @@ class JiraContextClient(ContextClient):
                             "comment",
                             "labels",
                             "issuelinks",
+                            "subtasks",
+                            "parent",
                             "created",
                             "updated",
                             "creator",
@@ -427,7 +429,7 @@ class JiraContextClient(ContextClient):
                     f"{self._get_api_base()}/issue/{item_id}",
                     headers=self._get_auth_header(),
                     params={
-                        "fields": "summary,description,comment,labels,issuelinks,created,updated,creator",
+                        "fields": "summary,description,comment,labels,issuelinks,subtasks,parent,issuetype,created,updated,creator",
                         "expand": "renderedFields",
                     },
                 )
@@ -453,10 +455,66 @@ class JiraContextClient(ContextClient):
                     ticket.metadata["_comments"] = items[1:]
                     logger.debug(f"Fetched ticket {item_id} with {len(items)-1} comments")
                 
+                # For Epics and parent issues, also fetch child issues via JQL
+                # (subtasks are already in the subtasks field, but Epic children are not)
+                child_ids = await self._get_child_issue_ids(client, item_id)
+                if child_ids:
+                    # Merge with any subtask IDs already found
+                    existing_children = ticket.metadata.get("child_ticket_ids", [])
+                    all_children = list(set(existing_children + child_ids))
+                    ticket.metadata["child_ticket_ids"] = all_children
+                    logger.debug(
+                        f"Found {len(child_ids)} child issues for {item_id} "
+                        f"(total children: {len(all_children)})"
+                    )
+                
                 return ticket
         except httpx.HTTPError as e:
             logger.error(f"Failed to fetch ticket {item_id}: {e}")
             return None
+
+    async def _get_child_issue_ids(
+        self, client: httpx.AsyncClient, parent_id: str
+    ) -> list[str]:
+        """Fetch child issue IDs for a parent ticket (Epic children, etc.).
+
+        Uses JQL to find issues where parent = parent_id.
+
+        Args:
+            client: The HTTP client to use.
+            parent_id: The parent ticket key.
+
+        Returns:
+            List of child ticket keys.
+        """
+        try:
+            # Query for issues that have this ticket as their parent
+            # This catches Epic children and other parent-child relationships
+            jql = f'parent = "{parent_id}"'
+            headers = {
+                **self._get_auth_header(),
+                "Content-Type": "application/json",
+            }
+            response = await client.post(
+                f"{self._get_api_base()}/search/jql",
+                headers=headers,
+                json={
+                    "jql": jql,
+                    "maxResults": 50,  # Reasonable limit for children
+                    "fields": ["key"],  # Only need the keys
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            child_ids = [
+                issue.get("key") for issue in data.get("issues", [])
+                if issue.get("key")
+            ]
+            return child_ids
+        except httpx.HTTPError as e:
+            logger.debug(f"Failed to fetch child issues for {parent_id}: {e}")
+            return []
 
     async def disconnect(self) -> None:
         """Clear stored credentials."""
@@ -487,6 +545,12 @@ class JiraContextClient(ContextClient):
         # Parse description (handle Atlassian Document Format)
         description = self._extract_text(fields.get("description"))
 
+        # Extract child ticket IDs (subtasks)
+        child_ticket_ids = self._extract_subtask_ids(fields.get("subtasks", []))
+
+        # Extract parent ticket ID if this is a subtask
+        parent_ticket_id = self._extract_parent_id(fields.get("parent"))
+
         # Main ticket item
         items.append(
             ContextItem(
@@ -507,6 +571,8 @@ class JiraContextClient(ContextClient):
                     "ticket_id": key,
                     "labels": fields.get("labels", []),
                     "linked_issues": self._extract_linked_issues(fields.get("issuelinks", [])),
+                    "child_ticket_ids": child_ticket_ids,
+                    "parent_ticket_id": parent_ticket_id,
                 },
             )
         )
@@ -672,4 +738,28 @@ class JiraContextClient(ContextClient):
             if "inwardIssue" in link:
                 linked.append(link["inwardIssue"].get("key", ""))
         return [k for k in linked if k]
+
+    def _extract_subtask_ids(self, subtasks: list[dict]) -> list[str]:
+        """Extract subtask keys from subtasks field.
+
+        Args:
+            subtasks: List of subtask objects from JIRA API.
+
+        Returns:
+            List of subtask ticket keys.
+        """
+        return [s.get("key", "") for s in subtasks if s.get("key")]
+
+    def _extract_parent_id(self, parent: dict | None) -> str | None:
+        """Extract parent ticket ID if this issue is a subtask.
+
+        Args:
+            parent: Parent object from JIRA API, or None.
+
+        Returns:
+            Parent ticket key, or None if not a subtask.
+        """
+        if parent:
+            return parent.get("key")
+        return None
 

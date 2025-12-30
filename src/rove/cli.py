@@ -95,6 +95,8 @@ def main(ctx: click.Context, version: bool) -> None:
 
         rove gather TB-123                Build context for ticket TB-123
 
+        rove grow TB-123                  Analyze ticket and suggest improvements
+
         rove source add jira              Add JIRA as a context source
 
         rove find TB-123                  Find the context file for TB-123
@@ -182,6 +184,33 @@ def find(ticket_id: str) -> None:
 def search(query: str) -> None:
     """Search context files by keyword."""
     asyncio.run(cmd_search(query))
+
+
+@main.command("grow")
+@click.argument("ticket_id")
+@click.option("--source", "-s", help="Override default ticket source for gathering")
+def grow(ticket_id: str, source: str | None) -> None:
+    """Analyze a ticket and suggest improvements.
+
+    Reads the context file for the ticket (gathering it first if needed),
+    then uses AI to identify gaps and suggest questions that need answers.
+
+    Examples:
+
+        rove grow TB-123              Analyze TB-123 and suggest improvements
+
+        rove grow TB-123 --source jira   Gather from JIRA first, then analyze
+    """
+    asyncio.run(cmd_grow(ticket_id, source))
+
+
+# Alias 'gr' for 'grow'
+@main.command("gr", hidden=True)
+@click.argument("ticket_id")
+@click.option("--source", "-s", help="Override default ticket source for gathering")
+def grow_alias(ticket_id: str, source: str | None) -> None:
+    """Alias for 'grow'."""
+    asyncio.run(cmd_grow(ticket_id, source))
 
 
 # Source management commands
@@ -500,6 +529,98 @@ async def cmd_build_context(
             await db.update_task_status(task_id, "failed", str(e))
             click.echo(f"Error: {e}", err=True)
             sys.exit(1)
+    finally:
+        await db.close()
+
+
+async def cmd_grow(ticket_id: str, source_override: str | None) -> None:
+    """Analyze a ticket and suggest improvements.
+
+    Reads the context file for the ticket (gathering it first if needed),
+    then uses AI to identify gaps and generate improvement suggestions.
+    """
+    from .context_builder import ContextBuilder, find_project_root
+    from .search_agent import SearchAgent
+    from .ticket_analyzer import TicketAnalyzer
+
+    # Normalize ticket ID to uppercase for consistency
+    ticket_id = ticket_id.upper()
+
+    config = load_config()
+    db = await get_database()
+
+    try:
+        # Check if context file exists
+        record = await db.get_context_file(ticket_id)
+        project_root = find_project_root()
+        context_dir = project_root / ".context"
+
+        if record:
+            context_path = context_dir / record.filename
+            if context_path.exists():
+                click.echo(f"\nUsing existing context: .context/{record.filename}")
+            else:
+                # File was deleted, need to re-gather
+                record = None
+
+        # Gather context if needed
+        if not record:
+            click.echo(f"\nNo context file found for {ticket_id}, gathering...")
+            source = source_override or config.sources.default_ticket_source
+
+            # Create task
+            task_id = await db.create_task(ticket_id, "build")
+            await db.update_task_status(task_id, "in_progress")
+
+            try:
+                search_agent = SearchAgent(config)
+                context_builder = ContextBuilder(db)
+
+                click.echo(f"Searching for context from {source}...")
+                items = await search_agent.search(
+                    ticket_id=ticket_id,
+                    source_override=source,
+                )
+
+                if not items:
+                    click.echo("No context found for this ticket.", err=True)
+                    await db.update_task_status(task_id, "completed")
+                    sys.exit(1)
+
+                click.echo(f"Found {len(items)} context items.")
+                click.echo("Building context document...")
+                filename = await context_builder.build(ticket_id, items)
+
+                await db.update_task_status(task_id, "completed")
+                click.echo(f"✓ Context saved to: .context/{filename}")
+
+                # Update record reference
+                record = await db.get_context_file(ticket_id)
+
+            except Exception as e:
+                await db.update_task_status(task_id, "failed", str(e))
+                click.echo(f"Error gathering context: {e}", err=True)
+                sys.exit(1)
+
+        # Now analyze the context file
+        if not record:
+            click.echo("Failed to get context file record.", err=True)
+            sys.exit(1)
+
+        context_path = context_dir / record.filename
+        context_content = context_path.read_text()
+
+        click.echo("\nAnalyzing ticket for gaps...")
+        analyzer = TicketAnalyzer(config)
+        suggestions = await analyzer.analyze(ticket_id, context_content)
+
+        # Write suggestions file
+        suggestions_filename = f"{ticket_id}.suggestions.md"
+        suggestions_path = context_dir / suggestions_filename
+        suggestions_path.write_text(suggestions)
+
+        click.echo(f"\n✓ Suggestions saved to: .context/{suggestions_filename}")
+
     finally:
         await db.close()
 

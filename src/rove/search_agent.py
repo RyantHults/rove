@@ -135,9 +135,37 @@ class SearchAgent:
             all_items.append(comment)
             seen_urls.add(comment.url)
         
-        # Tier 1 = primary ticket + its comments
+        # Extract and fetch related tickets - these are tier 1
+        # Includes: child tickets (subtasks, epic children) + linked issues (blocks, relates to, etc.)
+        child_ticket_ids = primary_item.metadata.get("child_ticket_ids", [])
+        linked_issue_ids = primary_item.metadata.get("linked_issues", [])
+        # Combine and deduplicate
+        all_related_ids = list(set(child_ticket_ids + linked_issue_ids))
+        
+        related_fetched = 0
+        for related_id in all_related_ids:
+            related_item = await primary_client.get_item_details(related_id)
+            if related_item and related_item.url not in seen_urls:
+                # Mark as tier 1 child for relevance filtering
+                related_item.metadata["_is_tier1_child"] = True
+                all_items.append(related_item)
+                seen_urls.add(related_item.url)
+                related_fetched += 1
+                # Also get related ticket's comments
+                related_comments = related_item.metadata.pop("_comments", [])
+                for related_comment in related_comments:
+                    if related_comment.url not in seen_urls:
+                        related_comment.metadata["_is_tier1_child"] = True
+                        all_items.append(related_comment)
+                        seen_urls.add(related_comment.url)
+        
+        # Tier 1 = primary ticket + its comments + related tickets
         tier1_items = list(all_items)
-        logger.debug(f"Phase 1: Found ticket + {len(comments)} comments (tier 1)")
+        logger.debug(
+            f"Phase 1: Found ticket + {len(comments)} comments + "
+            f"{related_fetched} related tickets (tier 1) "
+            f"[{len(child_ticket_ids)} children, {len(linked_issue_ids)} linked]"
+        )
 
         # Phase 2: Expand references from tier 1 ONLY
         # Look for ticket IDs and PR numbers mentioned in the primary ticket/comments
@@ -349,8 +377,10 @@ Example: authentication, OAuth2, API keys, enterprise SSO"""
         tier3_items = []  # Everything else (messages, etc.)
         
         for item in items:
-            # Tier 1: Items that explicitly mention the ticket ID
-            if ticket_id and (
+            # Tier 1: Items that explicitly mention the ticket ID OR are marked as tier 1 children
+            if item.metadata.get("_is_tier1_child"):
+                tier1_items.append(item)
+            elif ticket_id and (
                 ticket_id.upper() in item.title.upper() or
                 ticket_id.upper() in item.content[:500].upper()
             ):
