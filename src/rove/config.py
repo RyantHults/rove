@@ -28,9 +28,9 @@ class SourceConfig:
     page_size: int = 50  # items per API call
     client_id: str = ""  # OAuth client ID (required for OAuth sources)
     client_secret: str = ""  # OAuth client secret (required for OAuth sources)
-    default_owner: str = ""  # GitHub: default org/owner for PR/issue lookups
-    default_repo: str = ""  # GitHub: default repo for PR/issue lookups
-    excluded_users: list[str] = field(default_factory=list)  # Slack: users to exclude from search
+    default_owner: str = ""  # Code repos: default org/owner for PR/issue lookups
+    default_repo: str = ""  # Code repos: default repo for PR/issue lookups
+    excluded_users: list[str] = field(default_factory=list)  # Chat sources: users to exclude from search
 
 
 @dataclass

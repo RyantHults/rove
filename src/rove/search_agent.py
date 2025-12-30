@@ -66,12 +66,12 @@ class SearchAgent:
                         source_config["client_id"] = src_cfg.client_id
                     if src_cfg.client_secret:
                         source_config["client_secret"] = src_cfg.client_secret
-                    # Include GitHub-specific config
+                    # Include code repo-specific config
                     if hasattr(src_cfg, "default_owner") and src_cfg.default_owner:
                         source_config["default_owner"] = src_cfg.default_owner
                     if hasattr(src_cfg, "default_repo") and src_cfg.default_repo:
                         source_config["default_repo"] = src_cfg.default_repo
-                    # Include Slack-specific config
+                    # Include chat/messaging-specific config
                     if hasattr(src_cfg, "excluded_users") and src_cfg.excluded_users:
                         source_config["excluded_users"] = src_cfg.excluded_users
                 self._clients[source] = factory(source_config)
@@ -129,7 +129,7 @@ class SearchAgent:
         all_items.append(primary_item)
         seen_urls.add(primary_item.url)
         
-        # Extract comments from metadata (JIRA stores them there)
+        # Extract comments from metadata (ticket sources may store them there)
         comments = primary_item.metadata.pop("_comments", [])
         for comment in comments:
             all_items.append(comment)
@@ -267,11 +267,11 @@ Example: authentication, OAuth2, API keys, enterprise SSO"""
         seen: set[str] = set()
 
         patterns = [
-            # JIRA tickets: ABC-123
+            # Ticket IDs: ABC-123 (common format for JIRA, Linear, etc.)
             (r"\b([A-Z]{2,10}-\d+)\b", "ticket"),
-            # GitHub PRs: PR #123, pull #123
+            # Pull requests: PR #123, pull #123
             (r"\b(?:PR|pull)\s*#?(\d+)\b", "pr"),
-            # GitHub issues: issue #123, #123 (in context)
+            # Issues: issue #123, #123 (in context)
             (r"\bissue\s*#?(\d+)\b", "issue"),
         ]
 

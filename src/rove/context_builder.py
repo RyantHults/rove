@@ -66,12 +66,12 @@ class ContextBuilder:
         for match in re.finditer(ref_pattern, content):
             urls.add(match.group(1))
 
-        # Extract JIRA ticket URLs (browse links)
-        jira_pattern = r'https?://[^\s<>\[\]"\']+/browse/[A-Z]+-\d+'
-        for match in re.finditer(jira_pattern, content):
+        # Extract ticket URLs (e.g., Atlassian browse links)
+        ticket_pattern = r'https?://[^\s<>\[\]"\']+/browse/[A-Z]+-\d+'
+        for match in re.finditer(ticket_pattern, content):
             urls.add(match.group(0))
 
-        # Extract GitHub PR/issue URLs
+        # Extract PR/issue URLs (e.g., GitHub, GitLab)
         github_pattern = r'https?://github\.com/[^\s<>\[\]"\']+/pull/\d+'
         for match in re.finditer(github_pattern, content):
             urls.add(match.group(0))
@@ -170,26 +170,30 @@ class ContextBuilder:
         if existing_content:
             context_part = f"\n\nExisting content summary:\n{existing_content[:1000]}..."
 
-        prompt = f"""Review these items for a context document. Keep only HIGH-VALUE items.
+        prompt = f"""Review these items for a context document about a specific ticket.
 
-KEEP items that:
-- Provide unique, actionable information about the ticket
-- Are the primary ticket description or direct comments on it
-- Are PRs that explicitly implement this ticket
-- Contain technical decisions or implementation details
+ALWAYS KEEP:
+- The primary ticket description (source:ticket)
+- Pull requests that implement this ticket (source:pr)
 
-DROP items that:
-- Duplicate information already in another item
-- Are only tangentially related (shared keywords but different purpose)
-- Reference different ticket IDs
-- Add no meaningful context beyond what's already captured
+KEEP chat messages ONLY IF they contain:
+- Technical decisions or implementation discussions
+- Questions and answers about how to build the feature
+- Bug reports or issues discovered during implementation
+- Context that explains WHY something was done a certain way
+
+DROP these types of messages even if they mention the ticket ID:
+- Standup/status updates ("I worked on X today", "My update:", "working on")
+- Messages just announcing ticket creation ("I created a subtask for...")
+- Brief acknowledgments or progress notes without technical substance
+- Bot notifications or automated messages
 {context_part}
 
 Items:
 {chr(10).join(summaries)}
 
 Return ONLY comma-separated indices of items to KEEP (e.g., "0, 2, 5").
-Be aggressive - fewer high-quality items is better than many low-quality ones:"""
+Prefer to keep discussion messages that mention the ticket ID:"""
 
         try:
             client = self._get_ai_client()
