@@ -4,7 +4,6 @@ The SearchAgent orchestrates multi-phase search across all configured sources,
 using AI for keyword extraction, relevance filtering, and reference expansion.
 """
 
-import re
 from datetime import datetime
 
 from openai import AsyncOpenAI
@@ -168,18 +167,19 @@ class SearchAgent:
         )
 
         # Phase 2: Expand references from tier 1 ONLY
-        # Look for ticket IDs and PR numbers mentioned in the primary ticket/comments
+        # Each plugin extracts references it can resolve from the content
         logger.debug("Phase 2: Expanding references from tier 1")
         tier1_references = self._extract_references(tier1_items)
         # Filter out self-reference
         tier1_references = [
-            (ref_type, ref_id) for ref_type, ref_id in tier1_references
+            (ref_type, ref_id, client)
+            for ref_type, ref_id, client in tier1_references
             if ref_id.upper() != ticket_id
         ]
         logger.debug(f"Found {len(tier1_references)} references in tier 1")
 
-        for ref_type, ref_id in tier1_references:
-            item = await self._expand_reference(ref_type, ref_id)
+        for ref_type, ref_id, client in tier1_references:
+            item = await self._expand_reference(ref_type, ref_id, client)
             if item and item.url not in seen_urls:
                 all_items.append(item)
                 seen_urls.add(item.url)
@@ -282,76 +282,66 @@ Example: authentication, OAuth2, API keys, enterprise SSO"""
             words = item.title.split()
             return [w for w in words if len(w) > 3 and w.isalnum()][:5]
 
-    def _extract_references(self, items: list[ContextItem]) -> list[tuple[str, str]]:
-        """Extract references to other items from content.
+    def _extract_references(
+        self, items: list[ContextItem]
+    ) -> list[tuple[str, str, ContextClient]]:
+        """Extract references by delegating to each plugin.
+
+        Each plugin defines its own patterns for finding references it can resolve.
+        This allows source-specific reference extraction rather than centralized
+        pattern matching.
 
         Args:
             items: List of items to scan for references.
 
         Returns:
-            List of (reference_type, reference_id) tuples.
+            List of (reference_type, reference_id, client) tuples.
+            The client is the one that can resolve the reference.
         """
-        references: list[tuple[str, str]] = []
+        references: list[tuple[str, str, ContextClient]] = []
         seen: set[str] = set()
 
-        patterns = [
-            # Ticket IDs: ABC-123 (common format for JIRA, Linear, etc.)
-            (r"\b([A-Z]{2,10}-\d+)\b", "ticket"),
-            # Pull requests: PR #123, pull #123
-            (r"\b(?:PR|pull)\s*#?(\d+)\b", "pr"),
-            # Issues: issue #123, #123 (in context)
-            (r"\bissue\s*#?(\d+)\b", "issue"),
-        ]
-
-        for item in items:
-            text = f"{item.title} {item.content}"
-            for pattern, ref_type in patterns:
-                for match in re.finditer(pattern, text, re.IGNORECASE):
-                    ref_id = match.group(1)
-                    key = f"{ref_type}:{ref_id}"
-                    if key not in seen:
-                        references.append((ref_type, ref_id))
-                        seen.add(key)
-
-        return references
-
-    async def _expand_reference(
-        self, ref_type: str, ref_id: str
-    ) -> ContextItem | None:
-        """Fetch details for a referenced item.
-
-        Dynamically finds plugins that support the given reference type
-        and attempts to resolve the reference through each one.
-
-        Args:
-            ref_type: The type of reference (ticket, pr, issue, etc.).
-            ref_id: The reference identifier.
-
-        Returns:
-            A ContextItem if found, None otherwise.
-        """
-        # Find all plugins that support this reference type
         for source_name in list_plugins():
             client = self._get_source_client(source_name)
             if not client:
                 continue
 
-            # Check if this plugin supports the reference type
-            if ref_type not in client.supported_reference_types():
-                continue
-
-            # Only try authenticated clients
+            # Only use authenticated clients
             if not client.is_authenticated():
                 continue
 
             try:
-                item = await client.get_item_details(ref_id)
-                if item:
-                    return item
-            except Exception:
-                continue  # Try next plugin
+                plugin_refs = client.extract_references(items)
+                for ref_type, ref_id in plugin_refs:
+                    key = f"{source_name}:{ref_type}:{ref_id}"
+                    if key not in seen:
+                        references.append((ref_type, ref_id, client))
+                        seen.add(key)
+            except Exception as e:
+                logger.debug(f"Reference extraction failed for {source_name}: {e}")
+                continue
 
-        return None
+        return references
+
+    async def _expand_reference(
+        self, ref_type: str, ref_id: str, client: ContextClient
+    ) -> ContextItem | None:
+        """Fetch details for a referenced item using the specified client.
+
+        Args:
+            ref_type: The type of reference (ticket, pr, issue, etc.).
+            ref_id: The reference identifier.
+            client: The client that can resolve this reference.
+
+        Returns:
+            A ContextItem if found, None otherwise.
+        """
+        try:
+            item = await client.get_item_details(ref_id)
+            return item
+        except Exception as e:
+            logger.debug(f"Failed to expand reference {ref_type}:{ref_id}: {e}")
+            return None
 
     async def _filter_relevant(
         self, items: list[ContextItem], primary: ContextItem

@@ -462,3 +462,53 @@ class SlackContextClient(ContextClient):
         """Return list of reference types this plugin can resolve."""
         return ["message"]
 
+    def extract_references(
+        self, items: list[ContextItem]
+    ) -> list[tuple[str, str]]:
+        """Extract Slack message references from content.
+
+        Finds Slack message permalinks like:
+        - https://workspace.slack.com/archives/C01234567/p1234567890123456
+
+        Converts them to the channel_id:message_ts format expected by get_item_details.
+
+        Args:
+            items: List of ContextItem objects to scan for references.
+
+        Returns:
+            List of (reference_type, reference_id) tuples.
+        """
+        import re
+
+        references: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        # Pattern for Slack message permalinks
+        # Format: https://workspace.slack.com/archives/CHANNEL_ID/p<timestamp>
+        # The timestamp is the message_ts with the decimal removed
+        permalink_pattern = re.compile(
+            r"https?://[a-zA-Z0-9_-]+\.slack\.com/archives/([A-Z0-9]+)/p(\d+)"
+        )
+
+        for item in items:
+            text = f"{item.title} {item.content}"
+
+            for match in permalink_pattern.finditer(text):
+                channel_id = match.group(1)
+                # Slack timestamps have format like "1234567890.123456"
+                # Permalinks use "p1234567890123456" (no decimal)
+                raw_ts = match.group(2)
+                # Convert back to Slack ts format: insert decimal before last 6 digits
+                if len(raw_ts) > 6:
+                    message_ts = f"{raw_ts[:-6]}.{raw_ts[-6:]}"
+                else:
+                    message_ts = raw_ts
+
+                ref_id = f"{channel_id}:{message_ts}"
+
+                if ref_id not in seen:
+                    references.append(("message", ref_id))
+                    seen.add(ref_id)
+
+        return references
+

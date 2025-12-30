@@ -527,6 +527,37 @@ class JiraContextClient(ContextClient):
         """Return list of reference types this plugin can resolve."""
         return ["ticket"]
 
+    def extract_references(
+        self, items: list[ContextItem]
+    ) -> list[tuple[str, str]]:
+        """Extract JIRA ticket references from content.
+
+        Finds ticket IDs matching the pattern [A-Z]+-[0-9]+ (e.g., TB-123, PROJ-456).
+
+        Args:
+            items: List of ContextItem objects to scan for references.
+
+        Returns:
+            List of (reference_type, reference_id) tuples.
+        """
+        import re
+
+        references: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        # Pattern for JIRA ticket IDs: PROJECT-NUMBER
+        ticket_pattern = re.compile(r"\b([A-Z]{2,10}-\d+)\b")
+
+        for item in items:
+            text = f"{item.title} {item.content}"
+            for match in ticket_pattern.finditer(text):
+                ticket_id = match.group(1).upper()
+                if ticket_id not in seen:
+                    references.append(("ticket", ticket_id))
+                    seen.add(ticket_id)
+
+        return references
+
     def _looks_like_ticket_id(self, query: str) -> bool:
         """Check if query looks like a JIRA ticket ID."""
         import re

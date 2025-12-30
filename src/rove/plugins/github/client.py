@@ -568,6 +568,66 @@ class GitHubContextClient(ContextClient):
         """Return list of reference types this plugin can resolve."""
         return ["pr", "issue", "commit"]
 
+    def extract_references(
+        self, items: list[ContextItem]
+    ) -> list[tuple[str, str]]:
+        """Extract GitHub PR and issue references from content.
+
+        Finds references like:
+        - PR #123, pull #123
+        - issue #123
+        - owner/repo#123 (full reference)
+
+        When ambiguous numbers are found (just #123), uses configured
+        default_owner/default_repo to scope them.
+
+        Args:
+            items: List of ContextItem objects to scan for references.
+
+        Returns:
+            List of (reference_type, reference_id) tuples.
+        """
+        references: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        # Patterns for GitHub references
+        patterns = [
+            # Full repo reference: owner/repo#123
+            (re.compile(r"\b([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)#(\d+)\b"), None),
+            # PR references: PR #123, pull #123, pull/123
+            (re.compile(r"\b(?:PR|pull)\s*#?(\d+)\b", re.IGNORECASE), "pr"),
+            # Issue references: issue #123
+            (re.compile(r"\bissue\s*#?(\d+)\b", re.IGNORECASE), "issue"),
+        ]
+
+        for item in items:
+            text = f"{item.title} {item.content}"
+
+            for pattern, ref_type in patterns:
+                for match in pattern.finditer(text):
+                    if ref_type is None:
+                        # Full repo reference - extract owner/repo and number
+                        repo = match.group(1)
+                        number = match.group(2)
+                        ref_id = f"{repo}#{number}"
+                        # We don't know if it's a PR or issue, default to pr
+                        actual_type = "pr"
+                    else:
+                        number = match.group(1)
+                        actual_type = ref_type
+                        # Scope to default repo if configured
+                        if self._default_owner and self._default_repo:
+                            ref_id = f"{self._default_owner}/{self._default_repo}#{number}"
+                        else:
+                            ref_id = number
+
+                    key = f"{actual_type}:{ref_id}"
+                    if key not in seen:
+                        references.append((actual_type, ref_id))
+                        seen.add(key)
+
+        return references
+
     def _looks_like_ticket_id(self, query: str) -> bool:
         """Check if query looks like a ticket ID (e.g., TB-214, ABC-123)."""
         return bool(re.match(r"^[A-Z]{2,10}-\d+$", query.upper()))

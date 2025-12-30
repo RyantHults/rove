@@ -97,6 +97,7 @@ def mock_source_client(sample_context_item: ContextItem) -> MagicMock:
     mock_client.get_item_details = AsyncMock(return_value=sample_context_item)
     mock_client.search = AsyncMock(return_value=[sample_context_item])
     mock_client.supported_reference_types.return_value = ["ticket"]
+    mock_client.extract_references.return_value = []  # Default: no references found
     mock_client.get_searchable_fields.return_value = [
         SearchableField(
             name="ticket_id",

@@ -17,10 +17,17 @@ def search_agent(mock_config: RoveConfig) -> SearchAgent:
 
 
 class TestExtractReferences:
-    """Tests for the _extract_references method."""
+    """Tests for the _extract_references method.
 
-    def test_extracts_jira_tickets(self, search_agent: SearchAgent):
-        """Test extracting JIRA ticket references."""
+    Note: _extract_references now delegates to each plugin's extract_references()
+    method instead of using hardcoded patterns. These tests verify the delegation
+    and deduplication behavior.
+    """
+
+    def test_delegates_to_plugin_extract_references(
+        self, search_agent: SearchAgent, mock_source_client: MagicMock
+    ):
+        """Test that extraction delegates to plugin's extract_references method."""
         items = [
             ContextItem(
                 source="slack",
@@ -34,19 +41,41 @@ class TestExtractReferences:
             )
         ]
 
-        references = search_agent._extract_references(items)
+        # Configure mock to return references
+        mock_source_client.extract_references.return_value = [
+            ("ticket", "TB-123"),
+            ("ticket", "ABC-456"),
+        ]
 
-        assert ("ticket", "TB-123") in references
-        assert ("ticket", "ABC-456") in references
+        with patch(
+            "rove.search_agent.list_plugins", return_value=["jira"]
+        ), patch.object(
+            search_agent, "_get_source_client", return_value=mock_source_client
+        ):
+            references = search_agent._extract_references(items)
 
-    def test_extracts_pr_references(self, search_agent: SearchAgent):
-        """Test extracting PR references."""
+        # Verify plugin's extract_references was called
+        mock_source_client.extract_references.assert_called_once_with(items)
+
+        # Check references include the client
+        assert len(references) == 2
+        ref_types_and_ids = [(r[0], r[1]) for r in references]
+        assert ("ticket", "TB-123") in ref_types_and_ids
+        assert ("ticket", "ABC-456") in ref_types_and_ids
+        # Each reference should include the client
+        for ref in references:
+            assert ref[2] == mock_source_client
+
+    def test_aggregates_from_multiple_plugins(
+        self, search_agent: SearchAgent
+    ):
+        """Test that references are aggregated from multiple plugins."""
         items = [
             ContextItem(
                 source="slack",
                 item_type="message",
                 title="Test message",
-                content="See PR #123 and pull #456 for implementation",
+                content="See PR #123 and TB-456",
                 url="http://example.com",
                 timestamp=datetime.now(),
                 author="test",
@@ -54,32 +83,36 @@ class TestExtractReferences:
             )
         ]
 
-        references = search_agent._extract_references(items)
+        mock_jira_client = MagicMock()
+        mock_jira_client.is_authenticated.return_value = True
+        mock_jira_client.extract_references.return_value = [("ticket", "TB-456")]
 
-        assert ("pr", "123") in references
-        assert ("pr", "456") in references
+        mock_github_client = MagicMock()
+        mock_github_client.is_authenticated.return_value = True
+        mock_github_client.extract_references.return_value = [("pr", "123")]
 
-    def test_extracts_issue_references(self, search_agent: SearchAgent):
-        """Test extracting issue references."""
-        items = [
-            ContextItem(
-                source="github",
-                item_type="pr",
-                title="Test PR",
-                content="Fixes issue #789",
-                url="http://example.com",
-                timestamp=datetime.now(),
-                author="test",
-                metadata={},
-            )
-        ]
+        def get_client(source: str):
+            if source == "jira":
+                return mock_jira_client
+            elif source == "github":
+                return mock_github_client
+            return None
 
-        references = search_agent._extract_references(items)
+        with patch(
+            "rove.search_agent.list_plugins", return_value=["jira", "github"]
+        ), patch.object(search_agent, "_get_source_client", side_effect=get_client):
+            references = search_agent._extract_references(items)
 
-        assert ("issue", "789") in references
+        # Should have references from both plugins
+        assert len(references) == 2
+        ref_types_and_ids = [(r[0], r[1]) for r in references]
+        assert ("ticket", "TB-456") in ref_types_and_ids
+        assert ("pr", "123") in ref_types_and_ids
 
-    def test_deduplicates_references(self, search_agent: SearchAgent):
-        """Test that duplicate references are removed."""
+    def test_deduplicates_references_per_plugin(
+        self, search_agent: SearchAgent, mock_source_client: MagicMock
+    ):
+        """Test that duplicate references from the same plugin are removed."""
         items = [
             ContextItem(
                 source="slack",
@@ -91,23 +124,56 @@ class TestExtractReferences:
                 author="test",
                 metadata={},
             ),
+        ]
+
+        # Plugin returns duplicate references (could happen in real implementation)
+        mock_source_client.extract_references.return_value = [
+            ("ticket", "TB-123"),
+            ("ticket", "TB-123"),  # Duplicate
+        ]
+
+        with patch(
+            "rove.search_agent.list_plugins", return_value=["jira"]
+        ), patch.object(
+            search_agent, "_get_source_client", return_value=mock_source_client
+        ):
+            references = search_agent._extract_references(items)
+
+        # Should only appear once
+        ticket_refs = [(r[0], r[1]) for r in references if r[0] == "ticket" and r[1] == "TB-123"]
+        assert len(ticket_refs) == 1
+
+    def test_skips_unauthenticated_clients(
+        self, search_agent: SearchAgent
+    ):
+        """Test that unauthenticated clients are skipped."""
+        items = [
             ContextItem(
                 source="slack",
                 item_type="message",
-                title="Test 2",
-                content="Also check TB-123",
-                url="http://example.com/2",
+                title="Test message",
+                content="See TB-123",
+                url="http://example.com",
                 timestamp=datetime.now(),
                 author="test",
                 metadata={},
-            ),
+            )
         ]
 
-        references = search_agent._extract_references(items)
+        mock_client = MagicMock()
+        mock_client.is_authenticated.return_value = False
+        mock_client.extract_references.return_value = [("ticket", "TB-123")]
 
-        # Should only appear once
-        ticket_refs = [r for r in references if r == ("ticket", "TB-123")]
-        assert len(ticket_refs) == 1
+        with patch(
+            "rove.search_agent.list_plugins", return_value=["jira"]
+        ), patch.object(
+            search_agent, "_get_source_client", return_value=mock_client
+        ):
+            references = search_agent._extract_references(items)
+
+        # Should be empty since client is not authenticated
+        assert len(references) == 0
+        mock_client.extract_references.assert_not_called()
 
 
 class TestExtractKeywords:
@@ -148,7 +214,11 @@ class TestExtractKeywords:
 
 
 class TestExpandReference:
-    """Tests for the _expand_reference method."""
+    """Tests for the _expand_reference method.
+
+    Note: _expand_reference now takes the client as a parameter since the
+    caller (from _extract_references) already knows which client to use.
+    """
 
     @pytest.mark.asyncio
     async def test_expands_ticket_reference(
@@ -157,31 +227,44 @@ class TestExpandReference:
         mock_source_client: MagicMock,
         sample_context_item: ContextItem,
     ):
-        """Test expanding a ticket reference."""
-        with patch(
-            "rove.search_agent.list_plugins", return_value=["jira"]
-        ), patch.object(
-            search_agent, "_get_source_client", return_value=mock_source_client
-        ):
-            result = await search_agent._expand_reference("ticket", "TB-123")
+        """Test expanding a ticket reference using the provided client."""
+        result = await search_agent._expand_reference(
+            "ticket", "TB-123", mock_source_client
+        )
 
         assert result is not None
         assert result.source == "jira"
+        mock_source_client.get_item_details.assert_called_once_with("TB-123")
 
     @pytest.mark.asyncio
-    async def test_returns_none_for_unsupported_type(
+    async def test_returns_none_on_client_error(
         self,
         search_agent: SearchAgent,
         mock_source_client: MagicMock,
     ):
-        """Test that unsupported reference types return None."""
-        # Mock client only supports "ticket", not "unknown"
-        with patch(
-            "rove.search_agent.list_plugins", return_value=["jira"]
-        ), patch.object(
-            search_agent, "_get_source_client", return_value=mock_source_client
-        ):
-            result = await search_agent._expand_reference("unknown", "123")
+        """Test that errors during expansion return None."""
+        mock_source_client.get_item_details = AsyncMock(
+            side_effect=Exception("API error")
+        )
+
+        result = await search_agent._expand_reference(
+            "ticket", "TB-123", mock_source_client
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_item_not_found(
+        self,
+        search_agent: SearchAgent,
+        mock_source_client: MagicMock,
+    ):
+        """Test that None is returned when item is not found."""
+        mock_source_client.get_item_details = AsyncMock(return_value=None)
+
+        result = await search_agent._expand_reference(
+            "ticket", "NOTFOUND-999", mock_source_client
+        )
 
         assert result is None
 

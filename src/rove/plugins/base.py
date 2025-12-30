@@ -157,6 +157,27 @@ class ContextClient(Protocol):
         """
         ...
 
+    def extract_references(self, items: list[ContextItem]) -> list[tuple[str, str]]:
+        """Extract references from content that THIS plugin can resolve.
+
+        Each plugin defines its own patterns for finding references it understands.
+        This allows source-specific reference extraction rather than centralized
+        pattern matching.
+
+        Examples:
+        - JIRA: Matches [PROJECT]-[NUMBER] patterns (e.g., TB-123, PROJ-456)
+        - GitHub: Matches PR #123, issue #123, owner/repo#123
+        - Slack: Matches message permalinks, channel references
+
+        Args:
+            items: List of ContextItem objects to scan for references.
+
+        Returns:
+            List of (reference_type, reference_id) tuples that this plugin
+            can resolve via get_item_details().
+        """
+        ...
+
 
 # Credential helper functions using keyring
 def store_credentials(source: str, tokens: dict) -> None:

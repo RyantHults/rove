@@ -5,7 +5,7 @@ missing details, ambiguities, and questions that need answers.
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from openai import AsyncOpenAI
 
@@ -301,7 +301,11 @@ Format your response like this:
 - [Question 1]
 ...
 
-Only include topics where there are genuine gaps. Be specific and actionable.
+IMPORTANT:
+- Only include topics where there are genuine gaps
+- Be specific and actionable
+- Do NOT include any summary, conclusion, or wrap-up text at the end (e.g., "These questions address...")
+- End your response with the last question, nothing more
 """
 
         try:
