@@ -2,10 +2,23 @@
 
 Settings are loaded from ./.rove/settings.toml (in the current working directory) with the following precedence:
 1. CLI flags (highest)
-2. Config file
-3. Built-in defaults (lowest)
+2. Environment variables (ROVE_* prefix)
+3. Config file
+4. Built-in defaults (lowest)
+
+Environment variable naming convention:
+    ROVE_{SECTION}_{KEY} for top-level settings
+    ROVE_SOURCES_{SOURCE}_{KEY} for source-specific settings
+
+Examples:
+    ROVE_AI_API_KEY
+    ROVE_AI_MODEL
+    ROVE_SCHEDULER_REFRESH_INTERVAL
+    ROVE_SOURCES_GITHUB_DEFAULT_OWNER
+    ROVE_SOURCES_SLACK_EXCLUDED_USERS (comma-separated list)
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -96,16 +109,91 @@ def ensure_rove_home() -> None:
     ROVE_HOME.mkdir(parents=True, exist_ok=True)
 
 
+def _get_env(key: str, default: str | None = None) -> str | None:
+    """Get an environment variable with ROVE_ prefix."""
+    return os.environ.get(f"ROVE_{key}", default)
+
+
+def _apply_env_overrides(config: RoveConfig) -> None:
+    """Apply environment variable overrides to configuration.
+
+    Environment variables take precedence over settings.toml values.
+    Uses ROVE_ prefix with section names in uppercase.
+    """
+    # Sources section
+    if val := _get_env("SOURCES_DEFAULT_TICKET_SOURCE"):
+        config.sources.default_ticket_source = val
+
+    # Source-specific settings
+    for source_name in ["jira", "slack", "github"]:
+        source_config = getattr(config.sources, source_name)
+        prefix = f"SOURCES_{source_name.upper()}_"
+
+        if val := _get_env(f"{prefix}RATE_LIMIT"):
+            source_config.rate_limit = int(val)
+        if val := _get_env(f"{prefix}PAGE_SIZE"):
+            source_config.page_size = int(val)
+        if val := _get_env(f"{prefix}CLIENT_ID"):
+            source_config.client_id = val
+        if val := _get_env(f"{prefix}CLIENT_SECRET"):
+            source_config.client_secret = val
+        if val := _get_env(f"{prefix}DEFAULT_OWNER"):
+            source_config.default_owner = val
+        if val := _get_env(f"{prefix}DEFAULT_REPO"):
+            source_config.default_repo = val
+        if val := _get_env(f"{prefix}EXCLUDED_USERS"):
+            # Comma-separated list
+            source_config.excluded_users = [u.strip() for u in val.split(",") if u.strip()]
+
+    # Scheduler section
+    if val := _get_env("SCHEDULER_REFRESH_INTERVAL"):
+        config.scheduler.refresh_interval = val
+    if val := _get_env("SCHEDULER_RETRY_ATTEMPTS"):
+        config.scheduler.retry_attempts = int(val)
+    if val := _get_env("SCHEDULER_RETRY_DELAY"):
+        config.scheduler.retry_delay = val
+    if val := _get_env("SCHEDULER_STALENESS_THRESHOLD"):
+        config.scheduler.staleness_threshold = val
+
+    # AI section
+    if val := _get_env("AI_API_BASE"):
+        config.ai.api_base = val
+    if val := _get_env("AI_API_KEY"):
+        config.ai.api_key = val
+    if val := _get_env("AI_MODEL"):
+        config.ai.model = val
+    if val := _get_env("AI_MAX_HOPS"):
+        config.ai.max_hops = int(val)
+
+    # Credentials section
+    if val := _get_env("CREDENTIALS_BACKEND"):
+        config.credentials.backend = val
+
+    # Logging section
+    if val := _get_env("LOGGING_LEVEL"):
+        config.logging.level = val
+    if val := _get_env("LOGGING_CONSOLE_LEVEL"):
+        config.logging.console_level = val
+
+
 def load_config() -> RoveConfig:
-    """Load configuration from settings.toml, merging with defaults."""
+    """Load configuration from settings.toml, merging with defaults.
+
+    Precedence (highest to lowest):
+    1. Environment variables (ROVE_* prefix)
+    2. Config file (.rove/settings.toml)
+    3. Built-in defaults
+    """
     config = RoveConfig()
 
     if not SETTINGS_FILE.exists():
+        _apply_env_overrides(config)
         return config
 
     try:
         data = toml.load(SETTINGS_FILE)
     except Exception:
+        _apply_env_overrides(config)
         return config
 
     # Merge sources section
@@ -160,6 +248,9 @@ def load_config() -> RoveConfig:
             config.logging.level = log_data["level"]
         if "console_level" in log_data:
             config.logging.console_level = log_data["console_level"]
+
+    # Apply environment variable overrides (highest precedence after CLI flags)
+    _apply_env_overrides(config)
 
     return config
 
@@ -231,6 +322,19 @@ def create_default_config() -> bool:
     commented_config = '''# Rove Configuration
 # This file configures the Rove context extraction service.
 # For more information, see: https://github.com/your-org/rove
+#
+# Settings can also be configured via environment variables (ROVE_* prefix).
+# Environment variables take precedence over this file.
+#
+# Naming convention:
+#   ROVE_{SECTION}_{KEY} for top-level settings
+#   ROVE_SOURCES_{SOURCE}_{KEY} for source-specific settings
+#
+# Examples:
+#   ROVE_AI_API_KEY=sk-...
+#   ROVE_AI_MODEL=claude-3
+#   ROVE_SOURCES_GITHUB_DEFAULT_OWNER=my-org
+#   ROVE_SOURCES_SLACK_EXCLUDED_USERS=bot1,bot2,bot3
 
 [sources]
 # The primary source for fetching ticket details
