@@ -158,13 +158,27 @@ class TicketAnalyzer:
 
 1. A 2-3 paragraph SUMMARY of what this epic is trying to accomplish (business goal, key components, overall approach).
 
-2. EPIC-LEVEL GAPS - issues that span the whole epic, not specific tickets. Examples:
-   - Missing billing/payment story
-   - No authentication details
-   - Duplicate or conflicting tickets
-   - Missing success metrics or analytics requirements
+2. EPIC-LEVEL GAPS - High-level design issues that affect multiple tickets or architectural questions that might not have been considered:
+   - Conflicting technical approaches between tickets
+   - Duplicate tickets covering the same implementation
+   - Shared components, services, or data models that aren't consistently defined
+   - Cross-cutting dependencies or integration points that are unclear
+   - Scope ambiguities that span multiple tickets
 
-3. TICKETS NEEDING WORK - List ticket IDs (e.g., TB-291, TB-292) that have significant gaps or ambiguities that would block developers. Only flag tickets that genuinely need clarification - well-defined tickets should NOT be listed.
+   DO NOT include:
+   - Missing features that might be in other tickets (billing, analytics, etc.)
+   - Product-level concerns (success metrics, adoption strategy)
+   - Things that are simply "not mentioned" but aren't needed for implementation
+
+3. TICKETS NEEDING WORK - List ticket IDs (e.g., ticket-123, ticket-456) where a developer would be BLOCKED due to missing scope, dependency, or design clarity. Flag tickets where:
+   - Systems, services, or components impacted are unclear
+   - Upstream or downstream dependencies aren't specified
+   - Dependencies on other tickets, teams, or vendors are ambiguous
+   - Scope (what's in/out) is not clearly defined
+   - It's unclear if this modifies existing behavior or creates new behavior
+   - Assumptions are baked into the ticket without being explicit
+
+   DO NOT flag tickets just because they lack product details - focus on what's needed to understand SCOPE and DEPENDENCIES.
 
 Format your response EXACTLY like this:
 
@@ -277,7 +291,7 @@ Context file:
         Returns:
             Markdown section with gap analysis for this ticket.
         """
-        prompt = f"""You are analyzing a specific ticket that was flagged as needing work.
+        prompt = f"""You are analyzing a specific ticket that was flagged as needing technical clarification.
 
 EPIC CONTEXT (what this ticket is part of):
 {epic_summary}
@@ -287,11 +301,32 @@ TICKET TO ANALYZE ({ticket_id}):
 
 ---
 
-Identify gaps and ambiguities in this ticket. Your suggestions should be in the form of QUESTIONS that still need to be answered before a developer can implement this.
+Identify high-level DESIGN questions that must be answered before a developer can implement this. Focus on questions like:
 
-Group your questions by topic (e.g., "Signup Flow:", "Error Handling:", "Edge Cases:").
+- What systems, services, or components are impacted?
+- Are there upstream or downstream dependencies?
+- Does this depend on another ticket, team, or vendor?
+- What is explicitly in scope?
+- What is explicitly out of scope?
+- Are we modifying existing behavior or creating new behavior?
+- Are there assumptions baked into the ticket?
 
-Format your response like this:
+Group questions by topic areas such as:
+- **Scope & Boundaries**: What's in/out of scope, what's being modified vs. created
+- **Dependencies**: Other tickets, teams, services, vendors
+- **Systems Impact**: Which components/services are affected
+- **Data & Schema**: What data structures are needed (if mentioned in ticket)
+- **API & Contracts**: What endpoints/contracts are needed (if mentioned in ticket)
+- **Business Logic**: What are the rules and edge cases (if mentioned in ticket)
+- **Integration Points**: How this interacts with existing systems (if mentioned in ticket)
+
+DO NOT ask about:
+- Features not mentioned in this ticket (they may be in other tickets)
+- Product strategy, metrics, or analytics
+- General best practices that the developer can decide
+- Low-level implementation details that can be inferred from the requirements
+
+Group your questions by topic. Format your response like this:
 
 **[Topic 1]:**
 - [Question 1]
@@ -302,9 +337,10 @@ Format your response like this:
 ...
 
 IMPORTANT:
-- Only include topics where there are genuine gaps
-- Be specific and actionable
-- Do NOT include any summary, conclusion, or wrap-up text at the end (e.g., "These questions address...")
+- Stay focused on what IS mentioned in the ticket - don't expand scope
+- Be specific and implementation-focused
+- Infer technical questions from the requirements (e.g., if they mention "limits", ask about enforcement behavior)
+- Do NOT include any summary, conclusion, or wrap-up text at the end
 - End your response with the last question, nothing more
 """
 
@@ -433,4 +469,3 @@ IMPORTANT:
             lines.append("")
 
         return "\n".join(lines)
-
